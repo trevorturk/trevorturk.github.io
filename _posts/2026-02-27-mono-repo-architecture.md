@@ -56,56 +56,11 @@ The `ApiConstraint` checks if the request should go to WeatherMachine via `ENV["
 
 ### Directory Structure
 
-Controllers are namespaced to match the product:
-
-```
-app/controllers/
-├── api/                    # Shared API
-│   ├── api_controller.rb
-│   └── graphql_controller.rb
-├── dashboard/              # WeatherMachine
-│   ├── marketing_controller.rb
-│   ├── home_controller.rb
-│   └── usage_controller.rb
-├── v4/                     # Hello Weather v4
-│   └── marketing_controller.rb
-├── weather_controller.rb   # Hello Weather app
-├── blog_controller.rb      # Hello Weather blog
-└── marketing_controller.rb # Hello Weather marketing
-```
-
-Views follow the same pattern:
-
-```
-app/views/
-├── api/
-├── dashboard/
-│   ├── marketing/
-│   └── home/
-├── v4/
-│   └── marketing/
-├── weather/
-└── blog/
-```
+Controllers are namespaced by product: `dashboard/` for WeatherMachine, `v4/` for Hello Weather, `api/` for shared endpoints. Views follow the same pattern.
 
 ### Shared Resources
 
-Models, services, and the weather data pipeline are shared:
-
-```ruby
-# Both products use the same models
-class Account < ApplicationRecord
-  has_many :api_keys
-  has_many :locations
-end
-
-# Both use the same weather fetching
-class Api::Weather::Base
-  def forecast(lat:, lon:, source:)
-    # Same logic for both products
-  end
-end
-```
+The weather data pipeline is the core of both products - same models, same fetching logic, same caching. Only the presentation layer differs.
 
 ### Environment-Based Behavior
 
