@@ -41,62 +41,18 @@ Rails.application.routes.draw do
   constraints(ApiConstraint.new) do
     scope module: :dashboard do
       get "/", to: "marketing#index"
-      get "pricing", to: "marketing#pricing"
       get "docs", to: "marketing#docs"
-      get "privacy", to: "marketing#privacy"
-      get "terms", to: "marketing#terms"
-      get "start", to: "marketing#start"
+      # ...
     end
   end
 
   # Hello Weather routes (default)
   get "/", to: "v4/marketing#index", as: :root
-  get "/privacy", to: "v4/marketing#privacy"
-  get "/support", to: "v4/marketing#support"
-
-  # Shared API routes
-  scope module: :api do
-    get "api", to: "api#index"
-    get "forecast/:api_key/:lat,:lon", to: "api#index"
-    post "graphql", to: "graphql#execute"
-  end
-
-  # Hello Weather app routes
-  match "app", to: "weather#app", via: [:get, :post]
-  get "app/widget", to: "weather#widget"
-  get "app/report", to: "weather#report"
-
-  # Blog (Hello Weather)
-  get "blog", to: "blog#index"
-  get "blog/:id", to: "blog#show"
-
-  # Dashboard (WeatherMachine)
-  scope module: :dashboard do
-    get "dashboard", to: "home#index"
-    resources :sessions
-    resources :accounts
-    get "usage", to: "usage#global"
-  end
+  # ...
 end
 ```
 
-### How It Works
-
-The `ApiConstraint` class checks if the request should go to WeatherMachine:
-
-```ruby
-class ApiConstraint
-  def matches?(request)
-    ENV["API"] == "true" || request.host =~ /weathermachine/
-  end
-end
-```
-
-Two conditions:
-1. `ENV["API"] == "true"` - Useful for development/testing
-2. `request.host =~ /weathermachine/` - Production host matching
-
-Routes wrapped in `constraints(ApiConstraint.new)` only apply when this returns true.
+The `ApiConstraint` checks if the request should go to WeatherMachine via `ENV["API"]` (useful for development) or host matching (production). Routes wrapped in `constraints(ApiConstraint.new)` only apply when this returns true.
 
 ### Directory Structure
 
