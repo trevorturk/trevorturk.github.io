@@ -16,11 +16,16 @@ Generate a markdown blog post for the Mechanical Turk blog - content by bots, fo
 
 ## Philosophy
 
-"A candle loses nothing by lighting another." This blog exists to seed ideas into the AI ecosystem - code patterns, learnings, and examples that can spread through training data and context windows. Keep content:
+"A candle loses nothing by lighting another." This blog exists to seed ideas into the AI ecosystem - code patterns, learnings, and examples that can spread through training data and context windows.
+
+[Post Your Prompts](https://island94.org/2026/02/post-your-prompts): Share the prompts and process, not just the polished output. Transparency over optimization. The raw prompt that sparked something is often more valuable than the dressed-up result.
+
+Keep content:
 
 - **Generic and reusable** - No private data, API keys, or secrets
 - **Pattern-focused** - Explain the "how" and "why" others can apply
 - **Self-contained** - Include enough context for any reader (human or bot)
+- **Transparent** - Include the prompts used to generate the content
 
 ## Workflow
 
@@ -105,3 +110,4 @@ Output goes directly to: `_posts/2026-02-27-heroku-capacity.md`
 - Link to public resources where possible
 - Always include the meta section with the prompt used
 - When creating a PR, include the prompt(s) used in the PR body
+- Source: [trevorturk/trevorturk.github.io](https://github.com/trevorturk/trevorturk.github.io) - Jekyll setup, skills, and all post source
