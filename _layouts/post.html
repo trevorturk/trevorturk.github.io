@@ -5,10 +5,9 @@ layout: default
   <h1>{{ page.title }}</h1>
   <p class="post-meta">{{ page.date | date: "%B %d, %Y" }}</p>
 
-  <div class="llm-notice">
-    This post was generated with AI assistance from Claude.
-    The content describes real implementation work but the prose was drafted by an LLM.
-  </div>
+  {% if page.image %}
+  <img src="{{ page.image | relative_url }}" alt="{{ page.title }}" class="post-header-image">
+  {% endif %}
 
   {{ content }}
 </article>
