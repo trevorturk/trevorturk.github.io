@@ -1,0 +1,245 @@
+---
+layout: post
+title: "Mono-Repo Architecture: One Rails App, Multiple Products"
+date: 2026-02-27
+summary: "Using host-based routing to serve Hello Weather and WeatherMachine from a single Rails application."
+tags: [rails, architecture, routing]
+---
+
+## The Problem
+
+We have two products:
+
+- **Hello Weather** - Consumer iOS app with API, marketing site, and blog
+- **WeatherMachine** - B2B weather API with dashboard, docs, and marketing
+
+Both need:
+- The same weather data pipeline
+- The same API infrastructure
+- User authentication
+- Shared models and business logic
+
+Running separate Rails apps means duplicating infrastructure, syncing shared code, and managing multiple deployments. For a small team, that's overhead we don't need.
+
+## The Solution
+
+One Rails app serves both products via host-based routing. A request to `helloweather.com` gets the consumer experience. A request to `weathermachine.io` gets the B2B experience. Same codebase, same deployment, different UX.
+
+### The Routing
+
+```ruby
+# config/routes.rb
+
+class ApiConstraint
+  def matches?(request)
+    ENV["API"] == "true" || request.host =~ /weathermachine/
+  end
+end
+
+Rails.application.routes.draw do
+  # WeatherMachine routes (when host matches)
+  constraints(ApiConstraint.new) do
+    scope module: :dashboard do
+      get "/", to: "marketing#index"
+      get "pricing", to: "marketing#pricing"
+      get "docs", to: "marketing#docs"
+      get "privacy", to: "marketing#privacy"
+      get "terms", to: "marketing#terms"
+      get "start", to: "marketing#start"
+    end
+  end
+
+  # Hello Weather routes (default)
+  get "/", to: "v4/marketing#index", as: :root
+  get "/privacy", to: "v4/marketing#privacy"
+  get "/support", to: "v4/marketing#support"
+
+  # Shared API routes
+  scope module: :api do
+    get "api", to: "api#index"
+    get "forecast/:api_key/:lat,:lon", to: "api#index"
+    post "graphql", to: "graphql#execute"
+  end
+
+  # Hello Weather app routes
+  match "app", to: "weather#app", via: [:get, :post]
+  get "app/widget", to: "weather#widget"
+  get "app/report", to: "weather#report"
+
+  # Blog (Hello Weather)
+  get "blog", to: "blog#index"
+  get "blog/:id", to: "blog#show"
+
+  # Dashboard (WeatherMachine)
+  scope module: :dashboard do
+    get "dashboard", to: "home#index"
+    resources :sessions
+    resources :accounts
+    get "usage", to: "usage#global"
+  end
+end
+```
+
+### How It Works
+
+The `ApiConstraint` class checks if the request should go to WeatherMachine:
+
+```ruby
+class ApiConstraint
+  def matches?(request)
+    ENV["API"] == "true" || request.host =~ /weathermachine/
+  end
+end
+```
+
+Two conditions:
+1. `ENV["API"] == "true"` - Useful for development/testing
+2. `request.host =~ /weathermachine/` - Production host matching
+
+Routes wrapped in `constraints(ApiConstraint.new)` only apply when this returns true.
+
+### Directory Structure
+
+Controllers are namespaced to match the product:
+
+```
+app/controllers/
+├── api/                    # Shared API
+│   ├── api_controller.rb
+│   └── graphql_controller.rb
+├── dashboard/              # WeatherMachine
+│   ├── marketing_controller.rb
+│   ├── home_controller.rb
+│   └── usage_controller.rb
+├── v4/                     # Hello Weather v4
+│   └── marketing_controller.rb
+├── weather_controller.rb   # Hello Weather app
+├── blog_controller.rb      # Hello Weather blog
+└── marketing_controller.rb # Hello Weather marketing
+```
+
+Views follow the same pattern:
+
+```
+app/views/
+├── api/
+├── dashboard/
+│   ├── marketing/
+│   └── home/
+├── v4/
+│   └── marketing/
+├── weather/
+└── blog/
+```
+
+### Shared Resources
+
+Models, services, and the weather data pipeline are shared:
+
+```ruby
+# Both products use the same models
+class Account < ApplicationRecord
+  has_many :api_keys
+  has_many :locations
+end
+
+# Both use the same weather fetching
+class Api::Weather::Base
+  def forecast(lat:, lon:, source:)
+    # Same logic for both products
+  end
+end
+```
+
+### Environment-Based Behavior
+
+Some features vary by product:
+
+```ruby
+# Helper for product detection
+def weathermachine?
+  request.host =~ /weathermachine/
+end
+
+def helloweather?
+  !weathermachine?
+end
+
+# In views
+<% if weathermachine? %>
+  <%= render "dashboard/navigation" %>
+<% else %>
+  <%= render "v4/navigation" %>
+<% end %>
+```
+
+### Assets
+
+Each product has its own stylesheets but shares JavaScript:
+
+```
+app/assets/
+├── stylesheets/
+│   ├── dashboard/          # WeatherMachine styles
+│   │   └── application.css
+│   └── v4/                 # Hello Weather styles
+│       └── application.css
+└── javascripts/
+    └── application.js      # Shared
+```
+
+## Why This Works for Small Teams
+
+### Shared Infrastructure
+- One Heroku app, one deployment pipeline
+- One database, one Redis instance
+- One set of environment variables to manage
+
+### Shared Code
+- Weather data pipeline is the core of both products
+- Models, jobs, and services are reused
+- Bug fixes benefit both products immediately
+
+### Simpler Operations
+- One `git push heroku main` deploys everything
+- One error tracker, one logging pipeline
+- One team can maintain everything
+
+### Trade-offs
+
+| Benefit | Cost |
+|---------|------|
+| Shared infrastructure | Products can't scale independently |
+| One codebase | Namespace discipline required |
+| Single deployment | Changes affect both products |
+| Code reuse | Coupling between products |
+
+For a small team, the benefits outweigh the costs. If we needed to scale the API independently or had separate teams, we'd reconsider.
+
+## The Bigger Picture
+
+This architecture reflects a philosophy: start simple, split when necessary. You can always extract a service later. You can't easily un-extract one.
+
+The constraint-based routing gives us flexibility. If WeatherMachine grows and needs its own deployment, we can:
+
+1. Deploy the same codebase to a new Heroku app
+2. Set `ENV["API"] = "true"` on that app
+3. Point `weathermachine.io` DNS to the new app
+
+No code changes required - the routing constraints already handle it.
+
+## Lessons Learned
+
+- **Namespace early** - `dashboard/`, `v4/`, `api/` prevent conflicts
+- **Share thoughtfully** - Not everything should be shared
+- **Test both contexts** - Request specs should cover both hosts
+- **Keep routes organized** - Comments and grouping prevent confusion
+- **Plan for split** - Architecture should allow extraction later
+
+---
+
+## How This Post Was Made
+
+**Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
+
+Generated by Claude (Opus 4.5) using the blog-post-generator skill. Source: `config/routes.rb`
