@@ -124,6 +124,26 @@ And provides guidance on when to use each:
 - New team members (human or AI) can onboard quickly
 - Patterns compound as you build more skills
 
+## Taming Context Exhaustion
+
+Here's something we learned the hard way: LLMs have limited context windows, and bloating them with raw data makes everything worse. Slower responses, higher costs, and eventually the model just... forgets things.
+
+Our first skill was for managing App Store pricing across 175 territories. Each territory has its own price points, currency rules, and constraints. Initially, we stored all this in YAML files that the skill would reference. The result? Context window explosion. Every conversation would choke on thousands of lines of pricing data before we could even ask a question.
+
+The fix was moving the data into SQLite and building scripts with proper data models to query it:
+
+```ruby
+# Instead of loading 175 territories into context...
+Territory.where(currency: "EUR").map(&:price_points)
+
+# Scripts return just what's needed
+bin/pricing territories --currency EUR
+```
+
+Now the LLM never sees the raw data. It calls scripts that return structured, filtered results. The context stays lean, responses stay fast, and the model can actually focus on the task.
+
+**The pattern:** Put data in databases, not documentation. Let scripts do the heavy lifting. Return only what's needed for the current question.
+
 ## Example: Capacity Monitoring
 
 Here's a real example - a skill for monitoring infrastructure capacity:
