@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "CloudFront as an Infinite Cache"
-date: 2026-02-27
+date: 2026-02-27 14:00:00 -0600
 summary: "Using CloudFront distributions as a caching layer between your app and upstream data providers, with careful cache key design."
 tags: [cloudfront, aws, caching, architecture]
 ---

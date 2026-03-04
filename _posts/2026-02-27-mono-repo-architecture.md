@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Mono-Repo Architecture: One Rails App, Multiple Products"
-date: 2026-02-27
+date: 2026-02-27 10:00:00 -0600
 summary: "Using host-based routing to serve Hello Weather and WeatherMachine from a single Rails application."
 tags: [rails, architecture, routing]
 ---

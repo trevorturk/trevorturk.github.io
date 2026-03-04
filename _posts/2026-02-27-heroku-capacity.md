@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Heroku Capacity: Scaling for Traffic Spikes"
-date: 2026-02-27
+date: 2026-02-27 13:00:00 -0600
 summary: "Dyno scaling decisions backed by data, not guesswork, with guardrails that prevent both over-provisioning and capacity crunches."
 tags: [skills, scripts, heroku, scaling, performance]
 ---

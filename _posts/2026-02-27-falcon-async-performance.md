@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Falcon and Ruby Async: Why Ruby Works for I/O-Bound Services"
-date: 2026-02-27
+date: 2026-02-27 16:00:00 -0600
 summary: "Using Falcon and async-http for fiber-based concurrency, achieving 87% latency reduction without leaving Ruby."
 tags: [ruby, falcon, async, performance]
 ---

@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "CloudFront Logging: Time-Boxed Investigations"
-date: 2026-02-27
+date: 2026-02-27 15:00:00 -0600
 summary: "Running targeted logging campaigns to investigate timeout behavior and tune per-source timeouts."
 tags: [skills, scripts, cloudfront, aws, performance]
 ---

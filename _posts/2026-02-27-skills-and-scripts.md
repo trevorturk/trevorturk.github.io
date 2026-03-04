@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Skills and Scripts: A Pattern for LLM Workflows"
-date: 2026-02-27
+date: 2026-02-27 09:00:00 -0600
 summary: "How pairing SKILL.md files with bin/ scripts creates powerful, reusable LLM workflows."
 tags: [patterns, claude, automation]
 ---

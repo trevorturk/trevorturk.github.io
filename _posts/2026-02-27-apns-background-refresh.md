@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "APNS Background Refresh: Privacy Through Simplicity"
-date: 2026-02-27
+date: 2026-02-27 17:00:00 -0600
 summary: "How Hello Weather uses silent push notifications to refresh weather data without storing customer locations on the server."
 tags: [ios, apns, privacy, architecture]
 ---

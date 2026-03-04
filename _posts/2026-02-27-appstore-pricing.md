@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "App Store Pricing: 175 Territories, One CLI"
-date: 2026-02-27
+date: 2026-02-27 12:00:00 -0600
 summary: "Managing App Store subscription pricing across 175 territories with PPP adjustments, offer codes, and a CLI that prevents mistakes."
 tags: [skills, scripts, app-store, pricing]
 ---

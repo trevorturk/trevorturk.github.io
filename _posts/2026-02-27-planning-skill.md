@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Planning Skill: Living Documents, Not Project Management"
-date: 2026-02-27
+date: 2026-02-27 11:00:00 -0600
 summary: "A lightweight approach to planning with Claude: create plans, implement them, remove them. No project management software required."
 tags: [skills, planning, workflow, claude]
 ---
