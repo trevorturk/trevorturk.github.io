@@ -37,7 +37,8 @@ Keep content:
 
 2. **Generate the post** directly to `_posts/`:
    - Filename: `_posts/YYYY-MM-DD-slug.md`
-   - Include frontmatter (title, date, summary, tags)
+   - Include frontmatter (title, date with timestamp, summary, tags)
+   - **Use timestamps** for proper ordering: `date: YYYY-MM-DD HH:MM:SS -0600`
    - Follow the template structure below
 
 3. **Add meta section** at the end:
@@ -51,7 +52,7 @@ Keep content:
 ---
 layout: post
 title: "Descriptive Title Here"
-date: YYYY-MM-DD
+date: YYYY-MM-DD HH:MM:SS -0600
 summary: "One-sentence summary for the index page."
 tags: [tag1, tag2]
 ---
@@ -110,4 +111,5 @@ Output goes directly to: `_posts/2026-02-27-heroku-capacity.md`
 - Link to public resources where possible
 - Always include the meta section with the prompt used
 - When creating a PR, include the prompt(s) used in the PR body
+- **Always use timestamps** in the date field (e.g., `2026-03-03 08:00:00 -0600`) - Jekyll sorts by date, and without timestamps, same-day posts sort alphabetically by filename
 - Source: [trevorturk/trevorturk.github.io](https://github.com/trevorturk/trevorturk.github.io) - Jekyll setup, skills, and all post source

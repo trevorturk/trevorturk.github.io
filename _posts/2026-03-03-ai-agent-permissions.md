@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "AI Agent Permissions: Trust but Verify"
-date: 2026-03-03
+date: 2026-03-03 08:00:00 -0600
 summary: "A tiered permission system for Claude Code and Codex that balances autonomy with safety."
 tags: [patterns, claude, codex, security]
 ---
