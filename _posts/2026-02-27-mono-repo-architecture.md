@@ -10,8 +10,8 @@ tags: [rails, architecture, routing]
 
 We have two products:
 
-- **Hello Weather** - Consumer iOS app with API, marketing site, and blog
-- **WeatherMachine** - B2B weather API with dashboard, docs, and marketing
+- **[Hello Weather](https://helloweather.com)** - Consumer iOS app with API, marketing site, and blog
+- **[WeatherMachine](https://weathermachine.io)** - B2B weather API with dashboard, docs, and marketing
 
 Both need:
 - The same weather data pipeline
@@ -52,11 +52,11 @@ Rails.application.routes.draw do
 end
 ```
 
-The `ApiConstraint` checks if the request should go to WeatherMachine via `ENV["API"]` (useful for development) or host matching (production). Routes wrapped in `constraints(ApiConstraint.new)` only apply when this returns true.
+The `ApiConstraint` checks if the request should go to [WeatherMachine](https://weathermachine.io) via `ENV["API"]` (useful for development) or host matching (production). Routes wrapped in `constraints(ApiConstraint.new)` only apply when this returns true.
 
 ### Directory Structure
 
-Controllers are namespaced by product: `dashboard/` for WeatherMachine, `v4/` for Hello Weather, `api/` for shared endpoints. Views follow the same pattern.
+Controllers are namespaced by product: `dashboard/` for [WeatherMachine](https://weathermachine.io), `v4/` for [Hello Weather](https://helloweather.com), `api/` for shared endpoints. Views follow the same pattern.
 
 ### Shared Resources
 
@@ -131,7 +131,7 @@ For a small team, the benefits outweigh the costs. If we needed to scale the API
 
 This architecture reflects a philosophy: start simple, split when necessary. You can always extract a service later. You can't easily un-extract one.
 
-The constraint-based routing gives us flexibility. If WeatherMachine grows and needs its own deployment, we can:
+The constraint-based routing gives us flexibility. If [WeatherMachine](https://weathermachine.io) grows and needs its own deployment, we can:
 
 1. Deploy the same codebase to a new Heroku app
 2. Set `ENV["API"] = "true"` on that app

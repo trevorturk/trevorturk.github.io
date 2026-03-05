@@ -8,7 +8,7 @@ tags: [skills, scripts, cloudfront, aws, performance]
 
 ## The Problem
 
-Hello Weather proxies requests through CloudFront to multiple upstream weather data providers. Each provider has different latency characteristics. When users experience slowness, we need to answer: which source is slow, how slow, and under what conditions?
+[Hello Weather](https://helloweather.com) proxies requests through CloudFront to multiple upstream weather data providers. Each provider has different latency characteristics. When users experience slowness, we need to answer: which source is slow, how slow, and under what conditions?
 
 CloudFront logging provides the answers, but it's expensive to leave on permanently. We needed a way to run targeted investigations - enable logging, capture data, analyze it, then disable logging again.
 

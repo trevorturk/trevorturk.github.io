@@ -10,7 +10,7 @@ tags: [skills, scripts, app-store, pricing]
 
 App Store pricing is deceptively complex. Apple offers over 900 price tiers across 175 territories, each with its own currency, exchange rate fluctuations, and purchasing power differences. Setting prices manually in App Store Connect is tedious and error-prone. Worse, prices that look reasonable in one territory can be completely wrong for another due to local economic conditions.
 
-Hello Weather has 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. That's over 1,000 individual prices to manage. We needed a system that could:
+[Hello Weather](https://helloweather.com) has 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. That's over 1,000 individual prices to manage. We needed a system that could:
 
 - Calculate appropriate prices based on purchasing power parity (PPP)
 - Find the nearest valid Apple price tier

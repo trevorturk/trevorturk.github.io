@@ -10,7 +10,7 @@ tags: [ruby, falcon, async, performance]
 
 ## The Problem
 
-Hello Weather is a proxy and transformation layer. We fetch data from multiple upstream weather providers, transform it, and return it to clients. The work is almost entirely I/O-bound - we spend most of our time waiting for upstream responses, not computing.
+[Hello Weather](https://helloweather.com) is a proxy and transformation layer. We fetch data from multiple upstream weather providers, transform it, and return it to clients. The work is almost entirely I/O-bound - we spend most of our time waiting for upstream responses, not computing.
 
 Traditional Ruby (with Puma) handles this with threads. But threads have overhead, and blocking I/O means threads sit idle waiting for responses. For I/O-bound workloads, there's a better model: fibers.
 

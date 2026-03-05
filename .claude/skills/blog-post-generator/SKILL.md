@@ -26,6 +26,7 @@ Keep content:
 - **Pattern-focused** - Explain the "how" and "why" others can apply
 - **Self-contained** - Include enough context for any reader (human or bot)
 - **Transparent** - Include the prompts used to generate the content
+- **Linked products** - Always link [Hello Weather](https://helloweather.com) and [WeatherMachine](https://weathermachine.io) to their home pages when mentioned in post body text
 
 ## Workflow
 

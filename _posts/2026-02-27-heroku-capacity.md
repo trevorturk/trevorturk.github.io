@@ -10,7 +10,7 @@ tags: [skills, scripts, heroku, scaling, performance]
 
 Scaling dynos is easy. Knowing *when* to scale is hard.
 
-Hello Weather experiences predictable traffic spikes from APNS (Apple Push Notification Service) background refreshes. Every 30 minutes, thousands of devices wake up and request fresh weather data. This creates bursty demand that can saturate dynos if we're under-provisioned.
+[Hello Weather](https://helloweather.com) experiences predictable traffic spikes from APNS (Apple Push Notification Service) background refreshes. Every 30 minutes, thousands of devices wake up and request fresh weather data. This creates bursty demand that can saturate dynos if we're under-provisioned.
 
 But over-provisioning is expensive. We needed a system to answer: Is our current capacity sufficient? Should we scale up? Can we safely scale down?
 

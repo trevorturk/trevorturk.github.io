@@ -10,7 +10,7 @@ tags: [cloudfront, aws, caching, architecture]
 
 ## The Problem
 
-Hello Weather aggregates data from multiple upstream weather providers. Each provider has rate limits, latency variations, and occasional outages. Calling them directly from our app means:
+[Hello Weather](https://helloweather.com) aggregates data from multiple upstream weather providers. Each provider has rate limits, latency variations, and occasional outages. Calling them directly from our app means:
 
 - **Rate limit risk** - Thousands of users hitting the same endpoints
 - **Latency variance** - Each request depends on upstream response time
