@@ -29,7 +29,11 @@ tags: [tag1, tag2]
 ---
 ```
 
-Or use the `blog-post-generator` skill with Claude Code to generate posts automatically.
+Or use the `blog-post-generator` skill with Claude Code to generate posts automatically. The `post-ideas` skill researches the Hello Weather repos for candidate topics.
+
+## Agent Instructions
+
+Instructions for coding agents live in `AGENTS.md` (the source of truth); `CLAUDE.md` is just an import stub pointing at it.
 
 ## License
 
