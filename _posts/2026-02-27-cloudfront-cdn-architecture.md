@@ -216,7 +216,7 @@ Age: 123                       # Seconds since cached
 
 ## Related: Timeout Tuning
 
-This CDN architecture creates the need for per-source timeout tuning, which we cover in [CloudFront Logging: Time-Boxed Investigations](/2026/02/27/cloudfront-logging.html). Each source has different latency characteristics, and CloudFront logs help us tune timeouts appropriately.
+This CDN architecture creates the need for per-source timeout tuning, which we cover in [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/). Each source has different latency characteristics, and CloudFront logs help us tune timeouts appropriately.
 
 ## Results
 
