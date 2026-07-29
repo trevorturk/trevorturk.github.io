@@ -146,7 +146,7 @@ The recommend command outputs one of three states:
 
 Not all guardrail breaches mean "add more dynos":
 
-**Upstream timeouts** - If latency spikes are caused by slow upstream providers (weather data sources), adding dynos won't help. This needs timeout tuning (see [CloudFront Logging](/2026/02/27/cloudfront-logging.html)).
+**Upstream timeouts** - If latency spikes are caused by slow upstream providers (weather data sources), adding dynos won't help. This needs timeout tuning (see [CloudFront Logging](/cloudfront-logging/)).
 
 **Router saturation** - Look for `connect` time growth, queue-like error codes, elevated load. This *does* indicate dyno pressure.
 
