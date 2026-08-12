@@ -3,7 +3,7 @@ layout: post
 title: "An Agent Fan-Out Pipeline with a Hard Isolation Contract"
 date: 2026-07-29 09:00:00 -0600
 summary: "Running dozens of coding agents in parallel doesn't need a smarter reviewer. It needs a brief schema, central wiring done first, a mechanical verifier, and an isolation contract that makes throwaway-quality output safe to merge."
-tags: [ai-agents, parallelism, swiftui, android, workflow]
+tags: [ai-agents, parallelism, swiftui, ios, android, workflow]
 ---
 
 ## The Problem

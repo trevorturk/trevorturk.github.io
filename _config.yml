@@ -13,9 +13,11 @@ plugins:
 # Permalinks without dates (e.g., /heroku-capacity/ not /2026/02/27/heroku-capacity/)
 permalink: /:title/
 
-# Feed settings
+# Feed settings; the ios tag feed (/feed/by_tag/ios.xml) is listed on iosdevdirectory.com
 feed:
   path: feed.xml
+  tags:
+    only: [ios]
 
 # Exclude from build
 exclude:

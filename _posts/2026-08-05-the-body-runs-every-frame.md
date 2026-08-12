@@ -3,7 +3,7 @@ layout: post
 title: "The Body Runs Every Frame"
 date: 2026-08-05 08:30:00 -0600
 summary: "A choppy watch drag traced to loop-invariant computed properties re-evaluated per ForEach element per body pass - the hoisting rules learned fixing it, and why a green, twice-reviewed 51-file fix was closed and re-landed in slices."
-tags: [swiftui, performance, workflow]
+tags: [swiftui, ios, performance, workflow]
 ---
 
 ## The Problem
