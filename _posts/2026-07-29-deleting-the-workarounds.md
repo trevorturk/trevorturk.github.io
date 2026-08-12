@@ -3,7 +3,7 @@ layout: post
 title: "Deleting the Workarounds: Fixing Every Digital Crown Bug at Once"
 date: 2026-07-29 09:10:00 -0600
 summary: "Seven months of Apple Watch crown-scrolling workarounds turned out to be the bug. Two structural root causes, one deletion PR, and how to hand-roll scroll momentum on watchOS."
-tags: [swift, swiftui, watchos, debugging]
+tags: [swift, swiftui, watchos, ios, debugging]
 ---
 
 ## The Problem

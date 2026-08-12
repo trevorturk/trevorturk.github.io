@@ -3,7 +3,7 @@ layout: post
 title: "Four Answers to One Question"
 date: 2026-08-05 08:50:00 -0600
 summary: "A codebase answered 'is this precipitation probability worth showing?' four different ways in four places - the fix was one pure chokepoint function, a rule that keeps it singular, and a sweep that proved it complete."
-tags: [swift, architecture, code-review]
+tags: [swift, ios, architecture, code-review]
 ---
 
 ## The Screenshot

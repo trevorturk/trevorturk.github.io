@@ -3,7 +3,7 @@ layout: post
 title: "Port the Ergonomics, Not the Library"
 date: 2026-08-05 08:10:00 -0600
 summary: "When bringing snapshot testing from a Ruby codebase to Swift Testing, the thing worth porting turned out to be three ergonomic properties - drop-in assertion, automatic naming, one-flag update - not a package and not a dependency."
-tags: [testing, swift, ruby, snapshot-testing, workflow]
+tags: [testing, swift, ios, ruby, snapshot-testing, workflow]
 ---
 
 ## The Problem
