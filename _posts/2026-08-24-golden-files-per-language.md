@@ -28,6 +28,7 @@ Two rules carry the design, one for each trap above.
 
 Language is the axis a rendering change moves along, so it is the axis the files split on. The matrix suite loops over every language and every intent and writes one snapshot per language:
 
+{% raw %}
 ```swift
 import Testing
 import Foundation
@@ -79,6 +80,7 @@ func escaped(_ value: String) -> String {
     }
 }
 ```
+{% endraw %}
 
 The whole matrix is driven by two `allCases`, which is what keeps it maintainable: add a `DateFormatIntent` case and every language file grows a row on the next record; add a `Language` and a new file appears. There is no separate list of "things to test" to fall out of sync with the feature. The rows are the intents (weekday rails, headers, hours, event times) and the columns are the two instants crossed with the two clocks, so a German file reads like a table you can scan:
 
