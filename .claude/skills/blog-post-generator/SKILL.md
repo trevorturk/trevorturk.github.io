@@ -152,16 +152,31 @@ For an editing pass or a rewrite of a published post. The archive-wide rewrite o
 
 **Must not change:**
 
-- Code blocks, byte for byte. Verify with a diff of the fenced blocks, not by eye.
+- Code blocks, byte for byte, in a prose pass. Only a fact-check pass (below) changes them, and only to match the source.
 - `##` headings, in text and order, so cross-links, summaries, and the index keep working. Do not add a Results or Lessons h2 to a post that has none; state what shipped and what it cost in the last body section instead.
 - Dates, numbers, quoted text, tables, blockquotes, and links, including links to other posts.
-- Facts. Reorganize what the drafting agent verified; do not add claims. If a nuance seems missing, check the source repo before writing it in. Caveats and admissions stay.
+- Facts, in a prose pass. Reorganize what the drafting agent verified; do not add claims. A fact-check pass corrects facts against the source. Caveats and admissions stay unless the source shows they are no longer true.
 - Anonymization. If a post says "Vendor A", keep it. Do not add or remove product, vendor, or person names.
 - The original prompts and process note in How This Post Was Made.
 
 **Record the pass.** Append a dated **Rewrite (YYYY-MM-DD):** or **Editing pass (YYYY-MM-DD):** paragraph to How This Post Was Made with the prompts verbatim and one sentence on what changed in this post.
 
-**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, the original prompt lines, internal links, `{% raw %}` balance, and the Rewrite paragraph, and prints the prose word count before and after. Then `bundle exec jekyll build`. State both in the PR.
+**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, the original prompt lines, internal links, `{% raw %}` balance, and the Rewrite paragraph, and prints the prose word count before and after. Then `bundle exec jekyll build`. State both in the PR. `--allow-code-changes` and `--allow-link-changes` exist for the fact-check pass and for deliberately retargeted links.
+
+## Judgment Calls
+
+The blog is authored by AI and expected to lean on model judgment. When revising or fact-checking, decide and act: reword a stale claim, fix a wrong count, correct a code comment that contradicts its code, drop a sentence that cannot be true, unlink a post that does not exist. Record each call in the post's meta paragraph and in the PR body under "Judgment calls". Do not stop to ask the owner, and do not leave an oddity in place with a note where a fix is available. The hard limits are the WHY rules in `AGENTS.md`: no secrets, no proprietary specifics, prompts stay verbatim.
+
+## Fact-Checking Against the Source
+
+Every claim in a post traces to `~/Code/helloweather/{web,ios,android}`: code, `.claude/skills/`, `plans/` and `PLANS.md`, and git history. A fact-check pass runs one agent per post:
+
+1. **List the checkable claims.** Code excerpts (API names, option names, control flow), numbers, dates, file paths, rule wording quoted from skills, and outcome claims ("zero errors since").
+2. **Find the source.** Grep the repos for identifiers from the code blocks and phrases from quoted rules. Use `git log -S` and `git log --since` for dates and "landed on" claims. Web is the Rails server (CloudFront, Heroku, Falcon, promo server, translation pipeline); iOS is Swift (StoreKit, widgets, watch, String Catalog); Android is Kotlin.
+3. **Correct the post where the source disagrees.** Rewrite a code excerpt to match the real code, then re-sanitize it: illustrative names, no secrets, no full data-source lists, anonymized vendors stay anonymized. Fix a wrong number or date. An outcome claim that cannot be checked is dated ("as of March 2026") rather than deleted or asserted. A quoted rule that has since changed gets the current wording, with "as of" if the change matters.
+4. **Do not add proprietary detail.** If matching the truth would require it, keep the excerpt generic and say it is simplified.
+5. **Record it.** Append **Fact check (YYYY-MM-DD):** to How This Post Was Made with the prompt verbatim and what was corrected. Omit the paragraph when nothing changed.
+6. **Verify** with `bin/verify-post --allow-code-changes` (add `--allow-link-changes` if a link was retargeted), then `bundle exec jekyll build`.
 
 ## Example Usage
 

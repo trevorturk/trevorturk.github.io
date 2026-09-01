@@ -28,7 +28,6 @@ The content here comes from real engineering work. An LLM (usually Claude) helps
 - **Reusable insights** - Things others (human or bot) can apply elsewhere
 - **Working examples** - Real code, sanitized of secrets etc
 
-Each post includes an AI-generated header image, because why not let the bots do the art too?
 
 ## Low Friction Knowledge Sharing
 

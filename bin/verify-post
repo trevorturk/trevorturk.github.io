@@ -1,16 +1,20 @@
 #!/bin/bash
-# Usage: verify-post.sh _posts/YYYY-MM-DD-slug.md
+# Usage: bin/verify-post [--allow-code-changes] [--allow-link-changes] _posts/YYYY-MM-DD-slug.md
+# --allow-code-changes: for a fact-check pass that corrected code against the source repo.
+# --allow-link-changes: when a link was deliberately removed or retargeted.
 # Checks a revised post against main: fenced code blocks byte-identical,
 # same ## headings in the same order, front matter date unchanged, and the
 # meta section still carries the original prompts. Exit 1 on any failure.
 set -uo pipefail
+ALLOW_CODE=0; ALLOW_LINKS=0; f=""
+for a in "$@"; do case "$a" in --allow-code-changes) ALLOW_CODE=1;; --allow-link-changes) ALLOW_LINKS=1;; *) f="$a";; esac; done
 cd /Users/trevorturk/Code/trevorturk.github.io
-f="${1#/Users/trevorturk/Code/trevorturk.github.io/}"; fail=0
+f="${f#/Users/trevorturk/Code/trevorturk.github.io/}"; fail=0
 extract() { awk '/^```/{f=!f; print; next} f'; }
 h2s() { awk '/^```/{f=!f; next} !f && /^## /'; }
 old="$(git show "main:$f")"
 new="$(cat "$f")"
-if ! diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) >/dev/null; then
+if [ $ALLOW_CODE = 0 ] && ! diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) >/dev/null; then
   echo "FAIL: code blocks differ from main"; diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) | head -20; fail=1
 fi
 if ! diff <(printf '%s\n' "$old" | h2s) <(printf '%s\n' "$new" | h2s) >/dev/null; then
@@ -26,7 +30,7 @@ while IFS= read -r line; do
 done < <(printf '%s\n' "$old" | grep -E '^\*\*Prompt( [0-9]+)?:\*\*')
 if ! printf '%s\n' "$new" | grep -q '^\*\*Rewrite (2026-09-01):\*\*'; then echo "FAIL: no **Rewrite (2026-09-01):** paragraph"; fail=1; fi
 # links to other posts must survive
-for link in $(printf '%s\n' "$old" | grep -o '](/[a-z0-9-]*/)' | sort -u); do
+[ $ALLOW_LINKS = 1 ] || for link in $(printf '%s\n' "$old" | grep -o '](/[a-z0-9-]*/)' | sort -u); do
   printf '%s\n' "$new" | grep -qF -- "$link" || { echo "FAIL: internal link dropped: $link"; fail=1; }
 done
 # raw tags balanced
