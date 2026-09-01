@@ -12,7 +12,7 @@ Each upstream source declared its language support in one line of Ruby: the full
 
 ```ruby
 class Api::Sources::VendorC < Api::Sources::Base
-  def self.supported_languages
+  def self.supported_source_languages
     Api::Units::LANGUAGE - %w(zh_TW hi th vi)
   end
 end
@@ -20,7 +20,7 @@ end
 
 That subtraction list came from a docs page. Nobody had ever checked it against the API.
 
-[Hello Weather](https://helloweather.com) aggregates ten sources and serves 27 languages, so those declarations add up to a 270-cell matrix, and for years every cell was filled in by reading.
+[Hello Weather](https://helloweather.com) aggregates eleven sources and serves 27 languages. Ten of them carried a docs-derived declaration, a 270-cell matrix, and since it was written at the end of 2025 every cell had been filled in by reading.
 
 Nobody checked because localization bugs do not announce themselves. A source that silently returns English for Korean still returns a valid 200 with a readable summary. Tests pass. Monitoring is green. The only person who notices is a Korean user who sees "Mostly cloudy" in the middle of an otherwise-Korean interface, and that user does not file a bug report. They just think the app is bad.
 
@@ -61,7 +61,7 @@ When you send a language code a vendor cannot honor, one of exactly four things 
 
 Mode 1 is the friendly one. It is loud, it is caught in staging, and it is the only mode a naive integration survives, because it is the only one that cannot be ignored. It is also the most dangerous to *guess* about. On a hard-error source, an unsupported code does not degrade the summary. It kills the whole forecast, so that gate has to be exact.
 
-Modes 2, 3, and 4 all return HTTP 200. They are indistinguishable from success at the transport layer, which is why every one of them survived years in production behind a docs-derived matrix.
+Modes 2, 3, and 4 all return HTTP 200. They are indistinguishable from success at the transport layer, which is why every one of them survived seven months in production behind a docs-derived matrix.
 
 Mode 3 is the subtlest. Byte-comparison against the English baseline catches mode 2 and usually mode 4, but a Traditional Chinese request answered in Simplified passes that check. It is not English. It is genuinely translated. It is just wrong for the reader, and only a human looking at the characters catches it.
 
@@ -71,13 +71,13 @@ The corrections we shipped went in both directions. The docs were not pessimisti
 
 ```ruby
 # Before: exclusions copied from vendor docs
-def self.supported_languages
+def self.supported_source_languages
   Api::Units::LANGUAGE - %w(zh_TW hi el id ko ro th uk vi)
 end
 
 # After: probed 2026-07-20 — every one of those works at the plain code,
 # and Traditional Chinese works via the vendor's Hong Kong code
-def self.supported_languages
+def self.supported_source_languages
   Api::Units::LANGUAGE
 end
 
@@ -85,7 +85,7 @@ def api_language
   case source_language
   when "pt" then "pt_br"
   when "zh_TW" then "zh_hk"
-  else language_code
+  else super
   end
 end
 ```
@@ -96,6 +96,7 @@ Two sources that had been marked English-only for their entire lifetime turned o
 
 ```ruby
 SUMMARY_MAP = {
+  nil  => nil,
   1001 => "cloudy",
   2100 => "light_fog",
   6200 => "light_freezing_rain",
@@ -103,7 +104,7 @@ SUMMARY_MAP = {
 }.freeze
 
 def to_summary(val)
-  key = SUMMARY_MAP.fetch(val) { raise(Api::Weather::NotImplementedError, val) }
+  key = SUMMARY_MAP.fetch(val) { raise(Api::Weather::NotImplementedError, val.nil? ? "nil" : val) }
   return nil if key.nil?
 
   I18n.t("api.condition_code.#{key}", locale: source_language)
@@ -174,7 +175,7 @@ The `assert de.key?(:language)` is not redundant with the `assert_equal` below i
 
 ## Results
 
-- Ten sources probed across 27 languages, plus variant codes, in one session on 2026-07-20. Every source's capability declaration was wrong in at least one direction, and the exclusion lists were rewritten from probe evidence.
+- Ten sources probed across 27 languages, plus variant codes, in one session on 2026-07-20. Nine of the ten needed a correction, to the exclusion list or to the wire code, and the exclusion lists were rewritten from probe evidence.
 - Two sources that had been English-only for years gained full 27-language support: one via an unused vendor parameter, one via server-side translation of numeric condition codes.
 - One claimed-supported language newly excluded, one placeholder-token leak caught before it reached users, and one wrong-script mapping corrected.
 - Every response now carries an always-present `language` field. The corrected matrix will drift as vendors change, so the probe procedure, the failure-mode table, and the probe date live in a skill file that any future source integration is required to follow.
@@ -197,3 +198,5 @@ The `assert de.key?(:language)` is not redundant with the `assert_equal` below i
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The title lost its subtitle, the post now opens on the one-line exclusion list nobody had checked, the failure-mode commentary was split into shorter sentences, Results dropped the bullets that restated the Solution, and Lessons Learned went from seven rules to four. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The probe date, the four failure modes, the nine-language exclusion list, the three remapped codes, and the `language` field and its test all matched the 2026-07-20 source-language PR and the api-localization skill. Corrections: the source count is eleven, with ten carrying the docs-derived declarations that make the 270-cell matrix; that matrix dated from the end of 2025, so "for years" became "seven months"; "every source's declaration was wrong" became "nine of the ten needed a correction," since one English-only source was left unchanged; the excerpts now use `supported_source_languages` and `else super`, the names the code took the day after the probe when `supported_languages` was renamed and the `language_code` helper was deleted; and the condition-code map excerpt gained the `nil` entry and error message from the real code.

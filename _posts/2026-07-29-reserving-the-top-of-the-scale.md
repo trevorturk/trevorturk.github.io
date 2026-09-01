@@ -96,9 +96,9 @@ First, explicit constants below the floor:
 
 ```ruby
 def moon_score
-  case next_full_moon
-    when today    then night? ? 0.85 : 0.6
-    when tomorrow then night? ? 0.6  : 0.3
+  case astronomy.next_full_moon
+    when timezone.now.to_date      then night?(timezone.now) ? 0.85 : 0.6
+    when timezone.tomorrow.to_date then night?(timezone.now) ? 0.6 : 0.3
   else
     FALLBACK_SCORES[:moon]
   end
@@ -149,7 +149,7 @@ A 5 mb drop scores 0.15; a 10 mb drop scores 0.30. No public authority issues pr
 
 ### Corroboration
 
-Some inputs are too noisy for a single reading to be trusted with the top of the scale. Feels-like temperature and precipitation rate both come from forecast hours that can disagree wildly between refreshes. So a noisy signal bands only when **at least two hours in the window** cross the advisory threshold. Ruby's `many?` says this cleanly:
+Some inputs are too noisy for a single reading to be trusted with the top of the scale. Feels-like temperature and precipitation rate both come from forecast hours that can disagree wildly between refreshes. So a noisy signal bands only when **at least two hours in the window** cross the advisory threshold. ActiveSupport's `many?` says this cleanly:
 
 ```ruby
 current = currently.apparent_temperature_normalized
@@ -217,3 +217,5 @@ The boring tier creates its own cliff at tier entry, visibility jumping from 0.0
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and code, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The title lost its subtitle, the raw-zero trap moved from Results into the hazard-band section as that mechanism's limit, Results became four bullets, and Lessons Learned went from seven rules to four. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. Every constant, threshold, citation, and score excerpt matched the server's scoring file and its skill; two small corrections: `many?` is ActiveSupport's, not core Ruby's, and the `moon_score` excerpt now uses the real code's date comparisons (`timezone.now.to_date`, `night?(timezone.now)`) instead of undefined `today`/`tomorrow` helpers, with the astronomy source named generically.

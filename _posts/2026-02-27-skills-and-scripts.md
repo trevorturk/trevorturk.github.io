@@ -8,7 +8,7 @@ tags: [patterns, claude, automation]
 
 ## The Problem
 
-Our first skill managed App Store pricing across 175 territories, each with its own price points, currency rules, and constraints. A fresh conversation knows none of that. Every time you start one, something has to supply the knowledge again.
+Our first skill paired with a script managed App Store pricing across 175 territories, each with its own price points, currency rules, and constraints. A fresh conversation knows none of that. Every time you start one, something has to supply the knowledge again.
 
 Two common approaches:
 
@@ -30,7 +30,7 @@ Skills provide context and guidance. Scripts provide capability and safety. Toge
 
 ### Skills: Teaching the LLM
 
-A skill file lives in `.claude/skills/[name]/SKILL.md`:
+A skill file lives in `.claude/skills/[name]/SKILL.md` (we have since moved ours to `.agents/skills/`, which Codex reads natively, with `.claude/skills` left as a symlink so both tools find the same files):
 
 ```markdown
 ---
@@ -53,7 +53,7 @@ What scripts/tools exist
 Guardrails and warnings
 ```
 
-Claude Code loads these automatically and exposes each one as a `/skill-name` command.
+Claude Code discovers these from the filesystem. You can invoke one by name (`/skill-name`), but most of the time the model loads it on its own when a task matches the description line, so that line does the work of discovery.
 
 ### Scripts: Safe Automation
 
@@ -78,7 +78,7 @@ fi
 Scripts should be:
 
 - **Self-documenting** - Clear usage messages
-- **Safe by default** - Require confirmation for destructive actions
+- **Safe by default** - Preview destructive actions, and only execute them behind an explicit `--apply` flag or after a `--dry-run` pass
 - **Idempotent** - Running twice doesn't break things
 
 ### The Pairing
@@ -89,7 +89,7 @@ The skill names the scripts and says which ones are safe:
 ## Commands Available
 
 - `bin/check-status` - View current state (safe, read-only)
-- `bin/apply-changes` - Make modifications (requires confirmation)
+- `bin/apply-changes` - Make modifications (preview by default; `--apply` executes)
 ```
 
 Then it says when to use each:
@@ -99,7 +99,7 @@ Then it says when to use each:
 
 1. Run `bin/check-status` to see current state
 2. Analyze the output
-3. If changes needed, run `bin/apply-changes`
+3. If changes needed, run `bin/apply-changes`, then `bin/apply-changes --apply`
 4. Verify with `bin/check-status` again
 ```
 
@@ -111,50 +111,55 @@ The skill tells the LLM what is possible and where the guardrails are. The scrip
 
 The pricing skill taught us this the hard way. LLMs have limited context windows, and filling them with raw data makes everything worse: slower responses, higher costs, and a model that loses track of what was said earlier.
 
-We first stored all 175 territories in YAML files the skill referenced. Every conversation choked on thousands of lines of pricing data before we could ask a question.
+We first stored the price tiers for all 175 territories in YAML files the skill referenced, one file of about 700 lines per product, plus more for PPP ratios and exchange rates. Every conversation choked on thousands of lines of pricing data before we could ask a question.
 
-The fix was moving the data into SQLite and building scripts with proper data models to query it:
+The fix, eleven days later, was moving the reference data into a SQLite file and building the scripts on ActiveRecord models that query it (simplified):
 
 ```ruby
-# Instead of loading 175 territories into context...
-Territory.where(currency: "EUR").map(&:price_points)
+# Instead of loading every territory's tiers into context...
+class PricePoint < AppstoreRecord # ActiveRecord::Base over db/appstore.sqlite3
+  scope :for_territory, ->(territory) { where(territory: territory).order(:price) }
+end
 
-# Scripts return just what's needed
-bin/pricing territories --currency EUR
+# ...scripts return just what's needed
+bin/appstore ppp list
+bin/appstore validate --verbose
 ```
 
 Now the LLM never sees the raw data. It calls scripts that return structured, filtered results, so the context stays lean and responses stay fast. Put data in databases, not documentation. Let scripts do the heavy lifting, and return only what the current question needs.
 
 ## Example: Capacity Monitoring
 
-A real skill, for monitoring infrastructure capacity:
+A real skill, for monitoring Heroku dyno capacity, trimmed to its shape:
 
 ```markdown
 ---
-name: capacity-check
-description: Monitor and adjust infrastructure capacity
+name: Heroku Capacity
+description: Heroku dyno capacity workflow for traffic spikes using bin/heroku status, capture, and recommend. Use when checking scale after traffic changes, APNS spike windows, or Heroku error/latency regressions.
 ---
 
-# Capacity Check
+# Heroku Capacity Skill
 
-## When to Use
-- "Check current capacity"
-- "Are we ready for the traffic spike?"
-- "Scale up for the event"
+## Scope
+- validating whether current dyno count is sufficient
+- investigating traffic spike behavior (especially APNS cycles)
+- interpreting `HOLD`, `SCALE_UP`, `PROBE_DOWN`, and manual probe decisions
 
-## Commands
+## Primary Commands
 
-- `bin/capacity status` - Current state (read-only)
-- `bin/capacity scale [n]` - Adjust capacity (requires confirmation)
+- `bin/heroku status` - Quick status
+- `bin/heroku check --json` - One-command operational check
+- `bin/heroku capture --window spike_30 --json` then `bin/heroku recommend --json` - Manual capture flow
 
-## Guardrails
+## Operational Guardrails
 
-- Never scale below minimum (defined in config)
-- Always verify before scaling down
-- Log all changes for audit
+- Do not change dyno formation from a single short capture.
+- Keep `formation.yml` current after scaling changes.
+- Store and reference capture JSON paths in decisions/PRs.
+- Treat wrapper recommendations as decision support.
 ```
 
-The LLM knows when to use it, what commands exist, and where the safety boundaries are.
+Every command is read-only; scaling itself is still a human running the Heroku CLI. The LLM knows when to use the skill, what commands exist, and where the safety boundaries are.
 
 ## Getting Started
 
@@ -182,3 +187,5 @@ Start simple. One skill, one or two scripts. Iterate as you learn what works.
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Initial draft from first prompt; "Taming Context Exhaustion" section added via follow-up prompt based on real experience with the App Store pricing skill.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the pricing skill that prompted it, Why This Works is one paragraph instead of three lists, the Getting Started steps are kept as they were, and Lessons Learned drops the two bullets that restated the Solution. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The pricing skill was the first skill paired with a script, not the first skill (skills predate it by three months), so the opening says so. Skills now live in `.agents/skills/` with `.claude/skills` as a symlink, and Claude Code loads a skill when a task matches its description rather than only through a `/skill-name` command; both are reworded. The real scripts guard destructive actions with preview-by-default and `--apply` or `--dry-run` flags, not confirmation prompts, so the safety bullets and pairing example now say that. The SQLite excerpt showed a `Territory.where(currency:)` query that never existed; it is replaced with the real `PricePoint.for_territory` scope over an ActiveRecord base class and real `bin/appstore` commands, and the YAML-to-SQLite move is dated (eleven days after the skill landed). The capacity example was invented; it is replaced with the real `heroku-capacity` skill's description, scope, commands, and guardrails, whose commands are all read-only.

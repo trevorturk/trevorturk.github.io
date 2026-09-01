@@ -60,7 +60,9 @@ If the implementer has to grep to find where things register, the plan has faile
 > @lat = (@args[:lat] || @source_class.default_lat).to_f.truncate(3)
 > ```
 >
-> *Change required:* `truncate(3)` → `truncate(2)` on both lines.
+> *Change required*
+>
+> Change `truncate(3)` to `truncate(2)` on both lines.
 
 The skill's rule is *never cite a symbol you haven't confirmed exists.* The header carries the verification date, so a stale citation is visible rather than merely wrong.
 
@@ -69,8 +71,8 @@ The skill's rule is *never cite a symbol you haven't confirmed exists.* The head
 **3. Date every external fact with a `Verify:` marker.** Library versions, upstream payload shapes, platform policy deadlines, pricing: anything the codebase can't confirm gets flagged inline.
 
 ```markdown
-| cloud_cover | `cloud_cover` (%) | Recorded; `Verify:` 0-100 integer encoding per the API spec |
-| alert id | `Verify:` exact key name (`id` vs `alert_id`) | Verify |
+| cloud_cover | `cloud_cover` (%) | Recorded; Verify: 0-100 integer encoding per the API spec |
+| alert id | Verify: exact key name (`id` vs `alert_id`) | Verify |
 ```
 
 The skill's principle is *never present external facts as timeless; date them and flag them for re-checking.* The implementation checklist resolves `Verify:` markers before building on them. A marker that survives to code review is a bug in the review, not the plan.
@@ -79,11 +81,13 @@ The skill's principle is *never present external facts as timeless; date them an
 
 > **Effort honesty**: mark items cuttable vs required when they feed a release block, so time pressure cuts the right things.
 
-Something gets dropped under time pressure. The question is whether the person dropping it has the author's judgment. One release block also ends with an anti-list, *"Explicitly NOT required for this release (common trap — these feel related but aren't)"*, followed by six tempting adjacent upgrades. Naming the trap is cheaper than re-litigating it every session.
+Something gets dropped under time pressure. The question is whether the person dropping it has the author's judgment. One release block also ends with an anti-list, *"Explicitly NOT required for this release (common trap — these feel related but aren't)"*, followed by seven tempting adjacent upgrades. Naming the trap is cheaper than re-litigating it every session.
 
 One more rule keeps Ground Truth honest at implementation time:
 
-> **If the plan conflicts with existing patterns** — follow the patterns, update the plan. The codebase outranks the plan when they disagree.
+> **If the plan conflicts with existing patterns** — Follow the patterns (AGENTS.md, skills), update the plan.
+
+The skill's framing for the whole implementation phase is that the codebase outranks the plan when they disagree.
 
 ## Deletion: A "Record" Label Is a Delete Signal
 
@@ -103,7 +107,7 @@ Anything else is done: migrate, then remove. Being linked from the index is not 
 
 ### Migrate before you delete
 
-> Durable knowledge a finished plan holds — non-obvious decisions, API facts and gotchas, operational procedures, hard-won rationale — must be **moved into the relevant skill** *before* the plan is removed. Never keep a plan alive just to hold reference material, and never delete without first rehoming what's worth keeping.
+> Durable knowledge a finished plan holds — non-obvious decisions, vendor/API facts and gotchas, operational procedures, hard-won rationale — must be **moved into the relevant skill** (**preferred**), or README/AGENTS.md, *before* the plan is removed. Never keep a plan alive just to hold reference material, and never delete without first rehoming what's worth keeping.
 
 The web repo's pass removed 35 plans in one pull request and migrated their contents into a dozen skills. What moved outlives the change: negative results (three optimizations that didn't work, so nobody tries them again), upstream API quirks, capacity thresholds and their reopen gates, rejected vendor evaluations. What got deleted was the narrative of how we got there.
 
@@ -126,7 +130,7 @@ grep -rln "plan-name.md" plans/
 
 ## The Index Is a Ranking Surface, Not a Document Store
 
-`PLANS.md` had grown to 380 lines of duplicated prose. The policy that cut it in half:
+`PLANS.md` had grown to 380 lines of duplicated prose. The policy that cut it to 240:
 
 > PLANS.md is a navigation and ranking surface, not a document store. Duplicated prose goes stale the moment the underlying plan moves.
 >
@@ -141,11 +145,11 @@ The same restructuring moved per-item status boards next to the procedure they d
 
 Every plan also needs a ranking slot, not just a catalog line:
 
-> Every plan creation/removal MUST update `PLANS.md` — both the **Plan Catalog** entry AND its slot in the ranking machinery (a release-block item, a Triggered Work row, or a Not Next row with an explicit reopen condition). A plan that exists only in the catalog has no priority and will never be picked.
+> Every plan creation/removal MUST update `PLANS.md` — both the **Plan Catalog** entry AND its slot in the ranking machinery (a Release block item, a Triggered Work row, or a Not Next row with an explicit reopen condition). A plan that exists only in the catalog has no priority and will never be picked.
 
 ## The What's-Next State Machine
 
-The Android index answers "what's next?" with a deterministic four-step check:
+The Android index answers "what's next?" with a deterministic five-step check (step 4 arrived the day after this post, when GitHub issues became the capture layer for mid-session tangents):
 
 ```markdown
 ### What's Next Rule
@@ -154,13 +158,16 @@ The Android index answers "what's next?" with a deterministic four-step check:
    already in an active release block?
 2. Check **Recurring Work** for any row with `Next due` on or before today.
 3. Check **Triggered Work** for any fired trigger.
-4. Otherwise: work the first unchecked item in the lowest-numbered
+4. List **open GitHub issues** (`gh issue list --state open ...`) —
+   unconditional, in every answer; presentation rules in the
+   `gh-issues` skill.
+5. Otherwise: work the first unchecked item in the lowest-numbered
    **Release** block. If all release blocks are done, this repo is
    idle by design — confirm against the cross-repo index before
    starting anything in **Not Next**.
 ```
 
-The second half of step 4 is the reason the rule exists. The skill spells out the obligation:
+The second half of step 5 is the reason the rule exists. The skill spells out the obligation:
 
 > If all release blocks are complete, [the repo] is **idle by design** — check the cross-repo index before proposing anything from **Not Next**, and say so explicitly rather than inventing work.
 
@@ -172,7 +179,7 @@ The **Not Next** table keeps deferred work deferred. Every row carries a reopen 
 |---|---|
 | Modernization track (language/DI/toolchain majors) | Feature investment reopens, **or** a required library forces it (none currently does). Order inside the track is fixed by hard dependencies. |
 | Map-rendering rewrite | The packaging-compliance check fails (→ jumps into the active release), the vendor SDK breaks or EOLs, or feature investment reopens |
-| Localization Phase 2 (native UI chrome) | Only when the platform decision lands *and* Phase 1 has shipped — highest throwaway of the three phases |
+| Localization Phase 2 (native UI chrome) | The platform decision landed and the strings are implemented in open PRs held on a review decision; reopen anything further only after Release 1 ships |
 
 A matching hard rule: **never propose Not Next work as next; its reopen condition has to fire first.** Without it, "not now" degrades into "not now, unless the agent is feeling ambitious," which is not a policy.
 
@@ -198,7 +205,7 @@ Triggered and recurring work are first-class rows:
 
 Both tables answer what a stale todo list can't: *is this actionable today, and if not, what exactly would make it actionable?* Completing recurring work updates its `Next due` in the same change, so the schedule can't drift from the work.
 
-The cached answer lives at the top of the index as a **What's Next** section. The skill says to re-derive it only when *a checkpoint arrived, a trigger fired, or the user asks for fresh eyes.* Re-running full triage on every question burns context to arrive at the same answer.
+The cached answer lives at the top of the index as a **What's Next** section. The skill says to re-derive it only when *a checkpoint arrived, a trigger fired, an issue was added or closed, or the user asks for fresh eyes.* Re-running full triage on every question burns context to arrive at the same answer.
 
 ## Playbooks: The One Exception to Deletion
 
@@ -236,3 +243,5 @@ The test: *will this exact procedure run again, verbatim, for the next instance?
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying skill files and plan indexes, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the 135-file plans directory instead of the earlier post, the prose around each quoted rule was cut to what the quote does not already say, a stale "Step 5" reference to a four-step rule was corrected, and Lessons Learned went from nine bullets to five. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The What's Next Rule is now five steps (an open-issues check was added the day after this post), so the quoted block, the step reference, and the re-derive rule were updated to the current wording; the Not Next localization row was updated to its current reopen condition; the anti-list count was corrected from six to seven; the index trim was corrected from "in half" to 380 to 240 lines; and four quotes (the Ground Truth change line, the Verify markers, the migrate-before-delete rule, the conflicts-with-patterns rule) were aligned to the source text.

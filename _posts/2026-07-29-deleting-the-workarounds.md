@@ -16,7 +16,7 @@ That detail reframed everything. The crown wasn't unfocused. It was focused on t
 
 ## The Workaround Pile
 
-Over seven months, each symptom got its own patch. The vertical scroll view got `@FocusState` and a focus-on-appear. Alerts appearing at launch caused a focus race, so an `onChange` refocus was added. Focus didn't stick after an idle launch, so the single retry became a ladder of three, with a defocus-then-refocus reset in the middle. Returning from the background lost focus again, so a `scenePhase` handler followed. Error alerts stole it too, so an alert-dismissal handler followed that.
+Over seven months, each symptom got its own patch. In December the vertical scroll view got `@FocusState` and a focus-on-appear. In March, alerts appearing at launch caused a focus race, so a delayed retry arrived, with an `onChange` refocus on the alert count and a `scenePhase` handler for returning from the background. In May, focus didn't stick after an idle launch, so the single retry became a ladder of three, with a defocus-then-refocus reset in the middle; two weeks later the hourly strip, already suspected of stealing the crown, had its scroll view marked `.focusable(false)`. Error alerts stole focus too. That one was only diagnosed, in July, and never got its own handler.
 
 By July, `ForecastView` looked like this:
 
@@ -93,11 +93,11 @@ watchOS binds the Digital Crown to exactly one scrollable at a time. A horizonta
 
 ### Cause 2: explicit focus management suppresses native crown routing
 
-The detail screens had never crown-scrolled. That bug survived eight-plus experiments across two research sessions, including `@FocusState` reclaim, `.focusable(interactions: .edit)`, `NavigationStack` migration, and `.id`-nonce view recreation.
+The detail screens had never crown-scrolled. That bug survived eight-plus experiments in a single June research session, including `@FocusState` reclaim, `.focusable(interactions: .edit)`, `NavigationStack` migration, and `.id`-nonce view recreation.
 
 All of those experiments assumed the focus machinery was part of the solution. It was the problem. Remove `.focusable()`/`.focused()`/`onAppear`-focus from a pushed `ScrollView` and watchOS routes the crown to it natively, immediately, in every case. Apple's own documented crown examples never put a raw focusable `ScrollView` in the happy path. When your configuration appears nowhere in the platform's sample code, that's evidence, not coincidence.
 
-We did the upstream homework before committing to a rewrite. OS release notes, beta notes, and the year's SwiftUI session content contained zero crown focus-ownership changes, while adjacent crown and scroll-view bugs *were* being triaged. The same complication-launch failure reproduced in a first-party Apple app. Nothing was coming from the platform, so we fixed it ourselves.
+We did the upstream homework before committing to a rewrite. OS release notes, beta notes, and the year's SwiftUI session content contained zero crown focus-ownership changes, while adjacent crown and scroll-view bugs *were* being triaged. The same complication-launch failure had been reported against a first-party Apple app. Nothing was coming from the platform, so we fixed it ourselves.
 
 ## The Fix Is a Deletion
 
@@ -107,7 +107,7 @@ The change removed both root causes and every workaround built on top of them:
 - With no competing scrollable, the root `ScrollView` bound the crown natively, so all the focus machinery went, along with the `scenePhase` and alert refocus handlers.
 - The three detail screens lost their `.focusable()`/`.focused()`/focus-on-appear blocks.
 
-Net: 391 lines added, 122 removed, and nearly all of the additions are the hand-rolled pan, not new crown logic. `ForecastView` ended up simpler than it had been *before* the first workaround shipped.
+Net, in app code: 204 lines added, 121 removed (the PR's 391/122 total includes the plan doc), and nearly all of the additions are the hand-rolled pan, not new crown logic. `ForecastView` ended up simpler than it had been *before* the first workaround shipped.
 
 ### Hand-rolling the pan
 
@@ -174,6 +174,8 @@ Three details carry the pattern:
 - **Clamp `dt`.** `min(dt, 0.05)` keeps a resuming app from teleporting the strip to the far edge on its first tick.
 - **Latch the axis by `startLocation`, not by a reset in `onEnded`.** Cancelled gestures never call `onEnded`, so reset bookkeeping there goes stale and deadens the *next* pan. Keying the latch to the start location means every gesture re-latches and there is nothing to clean up.
 
+That is the July shape. As of September 2026 the strip has moved on twice: on 2026-08-06 the sleep loop became a single spring animation toward the gesture's predicted end, because watchOS has no display-link and a sleep loop can never align with vsync, and on 2026-08-15 the pan gave way to a native horizontal `ScrollView` with `.scrollDisabled(true)`, paged by tap and swipe. The focus machinery deleted here has not come back.
+
 ## Results
 
 Every case in the matrix, exercised with crown-only input before any touch:
@@ -191,8 +193,8 @@ One accepted trade-off, found by hostile runtime QA rather than code review: a v
 
 ## Lessons Learned
 
-- **N workarounds for one symptom means the workarounds are the bug.** Five patches that each half-fixed the same complaint were five pieces of evidence for a shared cause nobody had named yet.
-- **Reproduce the mechanism, not the symptom.** "Crown doesn't scroll" was unfixable for months. "Crown scrolls the wrong view" was fixable in a day.
+- **N workarounds for one symptom means the workarounds are the bug.** Four patches that each half-fixed the same complaint were four pieces of evidence for a shared cause nobody had named yet.
+- **Reproduce the mechanism, not the symptom.** "Crown doesn't scroll" was unfixable for months. "Crown scrolls the wrong view" was fixed the next day: the mechanism was reproduced in the simulator on 2026-07-21 and the deletion PR merged on 2026-07-22.
 - **Test the entry state.** Any QA step that touches the screen first destroys the launch-state bug you're hunting.
 - **A workaround that survives long enough becomes an assumption.** The focus machinery was treated as part of the fix, so every experiment kept it and iterated around it.
 - **Adversarial review earns its keep on deletions.** Four review passes caught a refresh-starvation regression, a snap-back bug, a stale gesture latch, and a lost VoiceOver scroll action, none of which the original QA matrix covered.
@@ -208,3 +210,5 @@ One accepted trade-off, found by hostile runtime QA rather than code review: a v
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and plan docs, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. This post got a light touch: the title lost its subtitle, the opening merged onto the symptom list, the two method paragraphs in Finding the Real Causes lost their bolded lead-ins, the hard-wrapped prose was unwrapped, and Lessons Learned dropped the bullet that repeated the Cause 1 heading. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The three code excerpts, the two root causes, and the Results table matched the deletion commit and its plan doc. The workaround chronology was corrected to the four shipped patches (the alert-dismissal handler was drafted in July and never shipped, so "five patches" became four), the line counts were split into app code versus the PR total, "two research sessions" became one, the first-party Apple app failure was a report rather than a reproduction, "fixable in a day" was dated to the 2026-07-21 QA session and 2026-07-22 merge, and a paragraph was added noting the strip's August changes.

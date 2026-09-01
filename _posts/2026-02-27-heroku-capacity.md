@@ -2,7 +2,7 @@
 layout: post
 title: "Heroku Capacity: Scaling for Traffic Spikes"
 date: 2026-02-27 13:00:00 -0600
-summary: "A capture/analyze/recommend script for Heroku dynos: sample latency during the APNS spike windows, score it against guardrail thresholds, and get HOLD, SCALE_UP, or PROBE_DOWN with the evidence recorded in YAML."
+summary: "A capture/analyze/recommend script for Heroku dynos: sample latency during the APNS spike windows, score it against guardrail thresholds, and get HOLD, SCALE_UP, PROBE_DOWN, or COLLECT_MORE with the evidence recorded in YAML."
 tags: [skills, scripts, heroku, scaling, performance]
 ---
 
@@ -31,7 +31,7 @@ bin/heroku
 
 Two YAML files hold the state:
 
-- `config/heroku/guardrails.yml` - Latency, error rate, load thresholds
+- `config/heroku/guardrails.yml` - Latency, error rate, load, and memory thresholds
 - `config/heroku/formation.yml` - Current formation, bounds, history
 
 ### The Pattern: Status -> Capture -> Analyze -> Recommend
@@ -56,48 +56,67 @@ bin/heroku recommend --json
 
 ### Guardrails YAML
 
-The guardrails file defines what healthy looks like, and every capture is scored against it:
+The guardrails file defines what healthy looks like, and every capture is scored against it. `thresholds` are hard limits; `targets` say how much headroom justifies probing down:
 
 ```yaml
 # config/heroku/guardrails.yml
-latency:
-  p50_max_ms: 200
-  p95_max_ms: 500
-  p99_max_ms: 1000
+thresholds:
+  router_p95_ms: 700
+  router_p99_ms: 1200
+  api_p95_ms: 750
+  error_rate_percent: 0.2
+  error_rate_min_count: 2
+  load_p95_normal: 0.70
+  load_p95_spike: 1.00
+  memory_p95_mb: 860
+  swap_p95_mb: 50
 
-error_rate:
-  max_percent: 0.1
+targets:
+  load_p95_ideal_max: 0.50
+  memory_percent_ideal_max: 75
 
-load:
-  queue_depth_max: 5
-  connect_time_max_ms: 100
+spike_windows:
+  - name: top_of_hour
+    minute: 0
+    duration_sec: 300
+  - name: mid_hour
+    minute: 30
+    duration_sec: 300
 ```
+
+The load threshold is looser for spike captures than for normal ones. A burst is allowed to run hot; steady traffic is not.
 
 ### Formation YAML
 
-The formation file records the current dyno counts, their bounds, and a history of every change with the captures that justified it:
+The formation file records the current dyno counts and sizes, their bounds, a rollback target, and a history of every change with its reason:
 
 ```yaml
-# config/heroku/formation.yml
-apps:
-  helloweather:
-    web:
-      current: 4
-      min: 2
-      max: 10
-    worker:
-      current: 1
-      min: 1
-      max: 2
+# config/heroku/formation.yml (as of 2026-02-26, trimmed)
+app: helloweather
+
+current:
+  web: 6
+  worker: 1
+  web_type: Standard-2X
+  worker_type: Standard-1X
+
+bounds:
+  web_floor: 6
+  web_ceiling: 40
+
+rollback:
+  web: 14
 
 history:
-  - date: 2026-02-15
-    change: web 3 -> 4
-    reason: spike_00 latency exceeded p95 threshold
-    captures: [spike_00_20260215_0001.json]
+  - date: "2026-02-26"
+    web: 6
+    reason: Reduced after guardrail captures showed sustained headroom
+  - date: "2026-02-24"
+    web: 8
+    reason: Stepped down after CPU optimization pass
 ```
 
-The history is the audit trail. The next decision starts from why the last one was made, not from memory.
+The history is the audit trail. The next decision starts from why the last one was made, not from memory. The capture JSON files behind each change are referenced in the PR that made it, not in this file.
 
 ### Capture Windows
 
@@ -106,10 +125,10 @@ Like CloudFront logging, capture windows align with traffic patterns:
 | Window | Timing | Purpose |
 |--------|--------|---------|
 | `normal` | Off-peak | Baseline capacity |
-| `spike_00` | :00-:08 | APNS top-of-hour |
-| `spike_30` | :30-:38 | APNS mid-hour |
+| `spike_00` | :00, five minutes | APNS top-of-hour |
+| `spike_30` | :30, five minutes | APNS mid-hour |
 
-The spike windows are where capacity problems surface. A `normal` capture on its own is a baseline, not a verdict.
+The script does not wait for the clock. `--window` sets the label, the number of log pulls (8 for a spike, 4 for normal), and which load threshold applies; the operator starts a spike capture at :00 or :30. The spike windows are where capacity problems surface. A `normal` capture on its own is a baseline, not a verdict.
 
 ### The One-Command Check
 
@@ -119,29 +138,41 @@ For a quick operational read, `check` does it all:
 bin/heroku check --json
 ```
 
-It runs a capture, analyzes it, and returns a recommendation along with how many captures stand behind it:
+It runs `status`, then a normal capture and a spike capture (`--spike-window`, default `spike_30`), and recommends across both. Start it at :00 or :30 so the spike capture earns its label. Trimmed output:
 
 ```json
 {
-  "formation": { "web": 4, "worker": 1 },
-  "guardrails": { "passed": true },
-  "latency": { "p50": 145, "p95": 312, "p99": 678 },
-  "recommended_state": "HOLD",
-  "captures_analyzed": 3
+  "formation_status": {
+    "configured": { "web": 6, "worker": 1 },
+    "live": { "web": 6, "worker": 1 },
+    "drift": false
+  },
+  "captures": {
+    "normal": { "summary": { "guardrails": { "passed": true, "recommended_state": "PROBE_DOWN" } } },
+    "spike_30": { "summary": { "guardrails": { "passed": true, "recommended_state": "HOLD" } } }
+  },
+  "recommendation": {
+    "decision": "HOLD",
+    "captures_considered": 2,
+    "clean_captures": 2,
+    "clean_spike_captures": 1,
+    "failed_captures": 0
+  }
 }
 ```
 
 ### Recommended States
 
-The recommend command outputs one of three states:
+The recommend command outputs one of four decisions:
 
-| State | Meaning | Action |
-|-------|---------|--------|
-| `HOLD` | Capacity is appropriate | Do nothing |
-| `SCALE_UP` | Guardrails breached | Increase dynos |
-| `PROBE_DOWN` | Significant headroom | Consider reducing |
+| Decision | Meaning | Action |
+|----------|---------|--------|
+| `SCALE_UP` | A recent capture failed a guardrail | Increase dynos |
+| `COLLECT_MORE` | Not enough clean captures yet | Capture again |
+| `HOLD` | Guardrails pass, but a capture is above the ideal load target | Do nothing |
+| `PROBE_DOWN` | Every capture is under the ideal load target | Consider reducing |
 
-`PROBE_DOWN` is deliberately cautious. It says you *might* be able to scale down, and asks for more captures before you do.
+`PROBE_DOWN` is deliberately hard to earn. It requires at least three clean captures (`--min-captures`), at least one of them a spike (`--min-spike`), and every one under `load_p95_ideal_max`. Anything short of that is `COLLECT_MORE` or `HOLD`. `recommend` reads the most recent capture files by count (`--recent`, default 6), not by age, so a weeks-old failed capture keeps driving `SCALE_UP` until newer files displace it; the skill recorded that trap in August 2026.
 
 ### Interpreting Failures
 
@@ -169,7 +200,7 @@ bin/heroku capture --window spike_00 --json
 
 # Get recommendation
 bin/heroku recommend --json
-# → SCALE_UP or HOLD
+# decision=SCALE_UP or decision=HOLD
 ```
 
 ### Post-Incident Analysis
@@ -180,11 +211,11 @@ After users report slowness, capture during the problem, then scale and record t
 # Capture during the problem
 bin/heroku capture --window spike_00 --json
 
-# Check guardrails
-bin/heroku check --json
+# Check guardrails across recent captures
+bin/heroku recommend --json
 
 # If guardrails breached, scale up
-heroku ps:scale web=6 -a helloweather
+heroku ps:scale web=8 -a helloweather
 
 # Update formation.yml
 # Document the change with capture references
@@ -201,10 +232,10 @@ bin/heroku capture --window spike_30 --json
 
 # Check recommendation
 bin/heroku recommend --json
-# → PROBE_DOWN (maybe)
+# decision=PROBE_DOWN, or COLLECT_MORE if fewer than 3 clean captures
 
-# If probe_down, reduce by 1
-heroku ps:scale web=3 -a helloweather
+# If PROBE_DOWN, reduce by 1
+heroku ps:scale web=5 -a helloweather
 
 # Monitor next spike window
 bin/heroku capture --window spike_00 --json
@@ -214,18 +245,20 @@ bin/heroku capture --window spike_00 --json
 
 ## Operational Guardrails
 
-The skill holds four rules the script cannot enforce:
+The skill holds rules the script cannot enforce. Four landed with it:
 
-- **Never scale from one capture.** Require multiple windows.
-- **Keep formation.yml current.** Update it after every change.
-- **Store capture artifacts.** Reference them in PRs.
+- **Never scale from one short capture.** Require a normal and a spike window.
+- **Keep formation.yml current.** Update it after every change, including dyno size.
+- **Store capture artifacts.** Reference their JSON paths in decisions and PRs.
 - **Use `--json` for automation.** Structured output is what scripts consume.
+
+A fifth was added in mid-2026: the recommendation is decision support. `SCALE_UP` and a failed guardrail get immediate attention; `HOLD` gets a first-principles review, not an automatic refusal to probe.
 
 ## Results
 
-- Every scaling change now has captures behind it and a `formation.yml` history entry naming them and the reason. The one on record, web 3 -> 4 on 2026-02-15, followed a `spike_00` capture that breached the p95 threshold.
+- Every scaling change now has captures behind it and a `formation.yml` history entry naming the new count and the reason. The two on record when the skill landed are both step-downs: web 8 on 2026-02-24 after a CPU optimization pass, and web 6 on 2026-02-26 after guardrail captures showed sustained headroom.
 - The APNS pattern is encoded in the capture windows instead of known only from experience.
-- The cost is patience. A decision waits on at least two windows, and a spike capture means waiting for the next :00 or :30.
+- The cost is patience. A decision waits on a normal and a spike window, a probe-down on three clean captures, and a spike capture means waiting for the next :00 or :30.
 - No dollar figure was measured for probing down. What changed is that a scale-down is a one-dyno probe with a defined rollback, not a gamble.
 
 ## Lessons Learned
@@ -243,3 +276,5 @@ The skill holds four rules the script cannot enforce:
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Source: `.claude/skills/heroku-capacity/SKILL.md`
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The opening now leads with the 30-minute APNS burst, each section says its part once, Results states what changed and what it cost and admits that savings were not measured, and Lessons Learned dropped the bullets that repeated the Operational Guardrails. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The guardrails and formation YAML excerpts were invented and are replaced with the real files as of 2026-02-26 (thresholds keyed `router_p95_ms` and friends, formation `current`/`bounds`/`rollback`, history entries with date, count, and reason but no capture list); the fabricated "web 3 -> 4 on 2026-02-15" history entry is replaced with the two real step-downs on 2026-02-24 and 2026-02-26. The `check` output was rewritten to the script's real `formation_status`/`captures`/`recommendation` shape, `check` is described as running both a normal and a spike capture, the fourth decision `COLLECT_MORE` and the three-clean-capture rule for `PROBE_DOWN` were added, the capture windows now match `guardrails.yml` (five minutes at :00 and :30, started by the operator), the scale examples use counts consistent with the real formation, and the Operational Guardrails note the fifth rule the skill added later.

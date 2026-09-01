@@ -2,13 +2,13 @@
 layout: post
 title: "Measure the String Before You Translate It"
 date: 2026-07-29 08:30:00 -0600
-summary: "Standalone Swift validators that render every localized string at its real font and compare it to a computed layout budget, turning UI truncation in 22 languages into a committed work-list, and then into a server-side content fix that needed no app update."
+summary: "Standalone Swift validators that render every localized string at its real font and compare it to a computed layout budget, turning UI truncation in 27 languages into a committed work-list, and then into a server-side content fix that needed no app update."
 tags: [swift, ios, localization, i18n, tooling]
 ---
 
 ## The Problem
 
-Customer QA reported cut-off text in the small stat cards of the [Hello Weather](https://helloweather.com) iOS app, in Spanish. The obvious fix was to shorten the Spanish strings, which is the same loop every localized app runs: ship a screen that fits in English, translate it into 25 more languages, wait for a support ticket, fix one string, ship an app update, repeat.
+Customer QA reported cut-off text in the small stat cards of the [Hello Weather](https://helloweather.com) iOS app, in Spanish. The obvious fix was to shorten the Spanish strings, which is the same loop every localized app runs: ship a screen that fits in English, translate it into 26 more languages, wait for a support ticket, fix one string, ship an app update, repeat.
 
 The loop is slow because nothing in the toolchain knows how wide a string will be. A localization catalog stores text. A SwiftUI layout computes widths at runtime, on device, in a specific font at a specific Dynamic Type size. The two facts never meet until a human looks at a screenshot.
 
@@ -186,9 +186,9 @@ The tool writes a markdown file that is checked in:
 
 | Card | Slot | Language | Width | Verdict | Source | Rendered |
 |---|---|---|---|---|---|---|
-| AQI | description | de | 242/134pt | OVER | `server:aqiLevelPhrase` | Gesundheitliche Auswirkungen moeglich. |
+| AQI | description | de | 242/134pt | OVER | `server:aqiLevelPhrase` | Gesundheitliche Auswirkungen möglich. |
 | AQI | description | en | 144/134pt | OVER | `server:aqiLevelPhrase` | Health effects possible. |
-| AQI | subtitle | it | 134/98pt | OVER | `server:aqiLevelName` | Molto Insalubre |
+| AQI | subtitle | it | 134/98pt | OVER | `server:aqiLevelName.capitalized` | Molto Insalubre |
 ```
 
 Committing generated output feels wrong until you use it once. It buys three things:
@@ -205,7 +205,7 @@ Of the 483 over-budget rows, 140 came from server-owned strings. Because those p
 
 The server-side pass shortened 300+ locale values across 22 languages under one rule:
 
-> **The dual-surface rule:** a shortened value must still read as natural prose on the app's detail screen and on the web product - not merely fit the card.
+> **The dual-surface rule:** every value must still read as natural prose on the iOS detail screens and the web product, not just fit the card.
 
 This is what stops "make it fit" from degrading into telegraphese. A pressure trend name has to work as a standalone card label and inside a sentence:
 
@@ -223,7 +223,7 @@ Verification closed the loop: point the client's width tool at the server branch
 
 The remaining 74 are adjudicated keeps, rows where no natural short form exists, recorded explicitly:
 
-- Composed two-item pollen phrases stay over in ~10 languages, because the joined nouns alone approach the budget. That one moves back to the client as a layout change (show the dominant type only).
+- Composed two-item pollen phrases stay over in ~10 languages, because the joined nouns alone approach the budget. That one was fixed the same day on the server instead, by rendering only the dominant pollen type in the phrase, which cleared all 17 over-budget pollen rows.
 - Thai wind bearings were deliberately left unabbreviated, because the local convention writes them out and abbreviating damages the prose surface.
 - Indonesian air quality names depart from the official band terminology to fit an 18pt subtitle, a documented trade rather than an oversight.
 
@@ -235,6 +235,7 @@ Writing keeps down in the same artifact as the findings is what makes the report
 - 300+ server locale values shortened across 22 languages and deployed as content, with zero app updates for the server-owned half of the fix
 - Server-string findings down from 140 to 74, every remainder adjudicated and recorded
 - The trade-off: desktop SF Pro stands in for the device font, so rows in the `MARGIN` band still need verification on a device
+- Since then: the validator flipped to gate mode on 2026-07-31, with the floor moved from 375pt to 390pt, the narrowest iPhone still sold. In August 2026 the standalone tools were folded into the unit-test target as `WidthReportTests`, run through `bin/width-reports` and measured with the real iOS font in the app-hosted test host. The recorded baselines matched the desktop proxy row for row across 1,755 rows, so the `MARGIN` caveat retired without ever having changed a verdict
 
 ## Lessons Learned
 
@@ -255,3 +256,5 @@ Writing keeps down in the same artifact as the findings is what makes the report
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and tools, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the Spanish QA report instead of a generic loop, the title is one clause, the registry and report sections each say their part once, Results holds what changed and the trade-off, and Lessons Learned went from eight rules to five. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The registry (74 keys, six slots, 14 scales), both validators, the 211 and 1,620/483/78/674 counts, the 134.5pt and 98.5pt budgets, the legend bugs, the 140-to-74 server drop, and the 308-value, 22-language server pass all matched the iOS and web repositories at the commits the post describes. Corrected: the language count in the opening (26 other languages, not 25) and the summary (the work-list spans 27); two report rows restored to the committed baseline ("möglich", and the subtitle source `server:aqiLevelName.capitalized`); the dual-surface rule now uses the PR's wording; the pollen residual now records what happened (fixed on the server the same day by rendering only the dominant type, not a client layout change); and Results gains a note that the gate flipped on 2026-07-31 at a 390pt floor and that the standalone tools were later folded into `WidthReportTests` measuring on the real iOS font.

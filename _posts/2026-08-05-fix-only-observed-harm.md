@@ -23,7 +23,7 @@ The countermeasure is six lines across two files.
 One paragraph went into `AGENTS.md`, the always-loaded agent instructions, because the gate has to apply when a fix is conceived, not only when it is reviewed:
 
 > Fix only observed harm: before building a fix or guard, name its evidence (a
-> fixture value, user report, error event, or support thread) — "semantically
+> fixture value, user report, Sentry event, or support thread) — "semantically
 > impure" and "could theoretically break" don't qualify. Won't-fix with a written
 > revive trigger is a first-class outcome. If a change makes rendered output read
 > worse to a user, technically-correct loses (see the reviewbot skill).
@@ -35,9 +35,9 @@ Two rows went into the code-review skill's anti-pattern table, for the cases tha
 | Technically-correct change that reads worse on screen | Describe what a user sees before/after; if after is worse, revert — nulls where a coherent value stood are the classic case |
 | Fix diff dominated by snapshot/cassette churn | Each wire-visible delta must be the point, not a ride-along; enumerate or shrink |
 
-That is the whole artifact. The adjacent rule already existed; the review skill already said "no defensive code for failures not verified to occur." The session audit exposed two gaps around it: nothing gated the pre-build moment, and nothing forced the user's-eye test. These lines close those gaps and nothing else.
+That is the whole artifact. The adjacent rules already existed; the review skill already said "do not hide real bugs behind defensive code" and flagged any `rescue` "for a failure mode not verified to occur." The session audit exposed two gaps around it: nothing gated the pre-build moment, and nothing forced the user's-eye test. These lines close those gaps and nothing else.
 
-The evidence list does the work. A fixture value, a user report, an error event, or a support thread are all things you can point at. "Semantically impure" and "could theoretically break" are things you can only argue about, and an agent will argue for them fluently, because they are always technically true of something.
+The evidence list does the work. A fixture value, a user report, a Sentry event, or a support thread are all things you can point at. "Semantically impure" and "could theoretically break" are things you can only argue about, and an agent will argue for them fluently, because they are always technically true of something.
 
 ## Won't-Fix Is an Outcome, Not a Failure
 
@@ -45,7 +45,7 @@ The gate only works if declining to fix something is a respectable way to close 
 
 An audit of precipitation handling shaped that requirement. A low-share data source occasionally reported phantom hourly snow at coarse mountain grid points, relayed into the accumulation field as-is. A gate was designed: cap the implied snow-to-liquid ratio and null anything above it. Then the evidence test was applied. The defect had appeared only at deliberately hunted edge locations. Never in a fixture, never in a user report, never in an error event. Meanwhile the proposed cap had a concrete cost. Real cold-smoke snowfall runs 35–40:1 ratios, so the guard risked nulling true data to suppress data nobody had complained about.
 
-The outcome was a documented known defect, won't-fix. The audit doc records the defect, the rationale, and the revive trigger: *any user report or fixture evidence, at which point the gate design is written and ready to ship.* That last clause makes won't-fix cheap to reverse. The thinking is parked rather than discarded, with the condition for un-parking it in writing. Nobody has to re-derive the fix or re-litigate the decision. They only have to observe the trigger.
+The outcome was a documented known defect, won't-fix. The audit's entry, since migrated from the plan into the weather-sources skill, records the defect, the rationale, and the revive trigger: *any user report or fixture evidence, at which point the gate design is written and ready to ship.* That last clause makes won't-fix cheap to reverse. The thinking is parked rather than discarded, with the condition for un-parking it in writing. Nobody has to re-derive the fix or re-litigate the decision. They only have to observe the trigger.
 
 ## When Technically Correct Loses
 
@@ -92,3 +92,5 @@ When you do ship a guard, ship it with a counter, and let the counter adjudicate
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. In this post the hard-wrapped paragraphs were unwrapped, the three example sections no longer open on the same "the Nth sentence" construction, stacked sentences were split, and Lessons Learned shrank from seven bullets to five. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The quoted `AGENTS.md` rule now reads "Sentry event" where the post had softened it to "error event"; the review skill's pre-existing rule is quoted in its real wording ("do not hide real bugs behind defensive code" and the `rescue` table row) instead of a paraphrase in quotation marks; and the won't-fix record is described as having migrated from the audit plan into the weather-sources skill, which happened before this post was written. The 55-deleted/1-kept, 14-day, 35–40:1, three-plus-years, 2026-07, and six-lines-two-files figures all matched their commits.

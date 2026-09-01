@@ -8,7 +8,7 @@ tags: [ai-agents, parallelism, swiftui, ios, android, workflow]
 
 ## The Problem
 
-An iOS visual-style catalog went from 41 to roughly 168 entries in about a month. An Android translation pass produced 191 strings across 27 locales. Both are [Hello Weather](https://helloweather.com) work, both were written by coding agents running about twenty at a time, and both used the same five-phase pipeline, because running twenty agents at once on one repo produces the same four failures every time:
+An iOS visual-style catalog went from 41 to roughly 168 entries in eleven days. An Android translation pass produced 191 strings across 27 locales. Both are [Hello Weather](https://helloweather.com) work, both were written by coding agents running about twenty at a time, and both used the same five-phase pipeline, because running twenty agents at once on one repo produces the same four failures every time:
 
 1. **Merge conflicts.** Every agent needs its work registered in some shared file, an enum, a switch, a router table, and they all edit that file at the same moment.
 2. **Incoherent output.** Twenty agents given twenty vague prompts produce twenty different interpretations of "good."
@@ -95,17 +95,23 @@ Only then: one build, fix only clearly diagnosed errors, one commit, a human QA 
 
 ## The Isolation Contract
 
-The pipeline produces a lot of code. The isolation contract is what makes 81,000 lines of it safe to merge.
+The pipeline produces a lot of code. The third pack alone landed 81,000 lines in one pull request, and by late July the catalog was about 173,000 lines. The isolation contract is what made that safe to merge.
 
 The catalog is debug-only. There is no user-facing picker, the whole thing sits behind an internal debug gate, and the default path renders production views untouched. On its own that isn't enough. Shared helper code is still a coupling channel, and coupling is what turns throwaway-quality code into a permanent tax on the production codebase.
 
-So the contract says: **shared style components are copies, never references.**
+So the contract, as written on 2026-07-26, said: **shared style components are copies, never references.**
 
 > Styles work makes minimal-to-zero production changes, so production features can launch and evolve without worrying about styles. Everything under the shared styles directory is **copies** — fork in-flux production views as prefixed types (mechanical copy first, tokenize second); never reference or modify them from shared style code.
 
 Two bounded exceptions, both deliberate. A style's own scroll view may call stable production leaf views read-only. The alerts view is always reused by reference, because the safety-critical surface must have exactly one implementation.
 
-Copies are usually the wrong instinct. Here they are the mechanism. Production charts were mid-rewrite during all of this. If the catalog referenced them, every production change would have needed validation against 168 downstream consumers of unknown quality. Because the catalog holds copies, the production rewrite shipped without ever considering them.
+Copies are usually the wrong instinct. Here they were the mechanism. Production stat charts were mid-rewrite behind a debug flag during all of this. If the catalog referenced them, every production change would have needed validation against 168 downstream consumers of unknown quality. Because the catalog held copies, the rewrite proceeded without ever considering them.
+
+That rule was a fan-out-era rule, and it has since been retired. On 2026-08-21, the same week a triage pass deleted 97 entries from the catalog, the skill replaced it:
+
+> **Styles share the real views.** Production is just the v4 style, and v5 is a candidate to replace it, so there is no wall to copy across. A style calls production views by reference (sheets, leaf views, the alerts view) and parameterizes them when it needs a variation; it copies a view only when it genuinely needs different behavior, never for isolation.
+
+The shared styles directory is gone. The copies rule held while 168 entries of unknown quality landed in eleven days; once the catalog had been culled and the default view became one candidate among the survivors, the wall had nothing left to protect.
 
 The rest of the policy follows from that:
 
@@ -122,8 +128,9 @@ func groupsCoverAllStyles() {
     let all = Set(SettingsManager.ForecastStyle.allCases)
     let union = SettingsManager.ForecastStyle.styleGroupSets
         .reduce(into: Set<SettingsManager.ForecastStyle>()) { $0.formUnion($1.1) }
+    let missing = all.subtracting(union)
 
-    #expect(all.subtracting(union).isEmpty)
+    #expect(missing.isEmpty, "Ungrouped styles: \(missing.map(\.rawValue).sorted())")
 }
 
 @Test("Production is exactly the default style")
@@ -149,7 +156,7 @@ Same shape, a different domain, and a much sharper verifier. The task: translate
 
 The brief schema became an anchor rather than a template. Each agent was pointed at the sibling iOS app's professionally reviewed translation file for the same locale and told to match its terminology. That removes the largest source of variance in parallel translation, twenty-seven agents independently deciding how to render "feels like" or "chance of rain." Those decisions were already made, by humans, and paid for.
 
-Central wiring came first, exactly as on iOS: a separate, behaviorally inert commit declaring all 28 locales in the locale config, wiring the per-app language picker, and adding the AppCompat service that persists the user's choice across OS versions. No translation files in that commit at all. With English-only resources present it changes nothing, and the shared configuration file was merged before a single translation agent ran.
+Central wiring came first, exactly as on iOS: a separate, behaviorally inert commit declaring 28 locales in the locale config (English plus the 27 targets), wiring the per-app language picker, and adding the AppCompat service that persists the user's choice across OS versions. No translation files in that commit at all. With English-only resources present it changes nothing, and the shared configuration file was merged before a single translation agent ran.
 
 The verifier is completely mechanical. Every locale must pass:
 
@@ -159,7 +166,7 @@ The verifier is completely mechanical. Every locale must pass:
 - XML validity
 - A full resource merge and compile with all 27 locales present
 
-None of those checks requires reading the translation. A parallel pipeline needs a gate that says yes or no without a human in the loop, and "does this Czech sentence read well" is not that gate. Key-set equality is. The residual risk is named rather than pretended away: mechanical checks confirm structural correctness, not fluency, and professional post-editing is planned as a separate pass.
+None of those checks requires reading the translation. A parallel pipeline needs a gate that says yes or no without a human in the loop, and "does this Czech sentence read well" is not that gate. Key-set equality is. The residual risk is named rather than pretended away: mechanical checks confirm structural correctness, not fluency. Professional post-editing was planned as a separate pass, then waived on 2026-07-31 in favor of the model-only quality pass that had cleared the sibling iOS launch.
 
 The platform wrinkle is the isolation contract in an unfamiliar costume. Android auto-enables any `values-XX/strings.xml` present in the build:
 
@@ -167,15 +174,15 @@ The platform wrinkle is the isolation contract in an unfamiliar costume. Android
 
 There is no debug gate, so merging the branch is the launch. The branch itself became the isolation boundary. It stays a deliberate draft, complete and verified and unmerged, until someone decides to ship localization, and the commit message says so explicitly.
 
-On iOS, what shipped is a catalog of roughly 168 entries, up from 41 in about a month: 81,000 lines of debug-only code that never alters default rendering and that a test keeps partitioned from production. The accepted cost is divergence. Entries are frozen as built, carry deliberate accessibility debt, and are paid down only if one is promoted. On Android, what exists is 191 strings across 27 locales, verified and unmerged, with the shipping decision and professional post-editing still ahead.
+On iOS, what shipped is a catalog of roughly 168 entries, up from 41 in eleven days: about 173,000 lines of debug-only code that never alters default rendering and that a test keeps partitioned from production. The accepted cost is divergence. Entries are frozen as built, carry deliberate accessibility debt, and are paid down only if one is promoted. On Android, what exists is 191 strings across 27 locales, verified and unmerged, held for the release that ships localization; the professional post-editing pass was waived on 2026-07-31.
 
 ## Lessons Learned
 
 - **Fix a fan-out with structure, not judgment.** A brief schema, central wiring, and a mechanical gate each remove a failure class. "Review more carefully" removes none.
 - **A gate that needs taste won't run at scale.** Key-set equality, format-specifier order, a clean parse, and audit greps say yes or no without a human.
-- **Copies beat references when quality is uneven.** Coupling fast-written code to production makes every later production change an N-way compatibility problem.
+- **Copies beat references when quality is uneven.** Coupling fast-written code to production makes every later production change an N-way compatibility problem. Once the catalog was culled to survivors, the copies rule was retired; it was scaffolding for the fan-out, not a permanent architecture.
 - **The isolation boundary can live at any layer, but it must exist and be written down.** A debug flag, a copy-not-reference rule, and an unmerged branch all work.
-- **Name the residual risk instead of hiding it.** Deliberate accessibility debt and pending translation review are both written down. Undocumented debt is the kind that surprises you.
+- **Name the residual risk instead of hiding it.** Deliberate accessibility debt and the translation review decision, including its later waiver, are both written down. Undocumented debt is the kind that surprises you.
 
 ---
 
@@ -188,3 +195,5 @@ On iOS, what shipped is a catalog of roughly 168 entries, up from 41 in about a 
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the two runs and their figures, each pipeline phase and the contract say their part once, the case study closes with what shipped and what it cost in place of a Results section, and Lessons Learned went from eleven bullets to five. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The 41-to-168 jump took eleven days (2026-07-15 to 07-26), not a month; 81,000 lines was the third pack alone, so the catalog total (about 173,000 lines) is now stated separately; the copies-not-references contract is dated to 2026-07-26 and the post now records that the skill retired it on 2026-08-21 in favor of styles sharing the real views, and the stat-chart rewrite is described as proceeding behind a flag rather than shipped. The Swift test excerpt now matches the real file, the locale config is described as 28 entries (English plus the 27 translated locales), and the Android professional post-editing pass is recorded as waived on 2026-07-31 rather than still pending.

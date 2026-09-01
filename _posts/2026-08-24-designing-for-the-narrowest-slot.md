@@ -10,7 +10,7 @@ tags: [swift, ios, localization, i18n, tooling]
 
 A chart's weekday rail holds seven ticks, and each tick holds three characters. `Mon Tue Wed` fits. So does `9am 10am` under the bars of the hourly chart, `Falling fast` on a two-line stat card, and a bare hour on a watch complication. Every one of these slots was drawn in English, looks perfect in English, and does not wrap or grow.
 
-Then a model translates the strings into 25 more languages, and nothing in the toolchain knows how wide any of them will be. A German label one character too wide clips the same way in the app, the widget, and on the watch, because it is the same string in the same slot. A language whose weekday abbreviations collapse two days onto the same three letters is worse: the axis renders two identical ticks, a data bug with no visible truncation. Six of the supported languages fail one test or the other straight from the system calendar's abbreviations. Without a gate, the first report comes from a screenshot or a customer, after shipping.
+Then a model translates the strings into 26 more languages, and nothing in the toolchain knows how wide any of them will be. A German label one character too wide clips the same way in the app, the widget, and on the watch, because it is the same string in the same slot. A language whose weekday abbreviations collapse two days onto the same three letters is worse: the axis renders two identical ticks, a data bug with no visible truncation. Six of the supported languages fail one test or the other straight from the system calendar's abbreviations. Without a gate, the first report comes from a screenshot or a customer, after shipping.
 
 [Hello Weather](https://helloweather.com) shows sentences where a typical weather app shows a number and an icon: pressure trends, precip timing, moon phases, air-quality advice, in 27 languages, and most of that text lives in slots like these. It is a one-person product with no localization agency behind it, so the fix has to fail a build rather than rely on a native speaker eyeballing 27 screenshots. Two instruments do that. Dates count characters, because a weekday rail is a contract with a hard cap. Stat cards measure ink, because a card is a layout and rendered glyph width is what overflows it.
 
@@ -22,7 +22,7 @@ Route every date and time string through one rulebook so the constrained surface
 
 Every date string flows through one enum of intents, each case naming a UI surface (`hourlyChartWeekday`, `statsChartHour`, `complicationHour`) rather than a format. The [date rulebook post](/date-format-rulebook/) covers that enum. What matters here is that enumerated surfaces let a test iterate the ones that render in a tight slot and assert a hard budget on all of them, in all 27 languages.
 
-The compact weekday rail carries the tightest rule: each label is at most three characters, letters and digits only, and the seven labels for a week must be pairwise distinct. Most languages satisfy it from the system calendar's abbreviated or standalone-short symbols. For the six that do not, the classifier returns a hand-declared seven-symbol array with the ruling attached. Here is the resolver and the contract test that enforces it, self-contained:
+The compact weekday rail carries the tightest rule: each label is at most three characters and three Unicode scalars, letters and digits only, and the seven labels for a week must be pairwise distinct. Most languages satisfy it from the system calendar's abbreviated or standalone-short symbols. For the six that do not, the classifier returns a hand-declared seven-symbol array with the ruling attached. Here is the resolver and the contract test that enforces it, self-contained:
 
 ```swift
 import Foundation
@@ -41,7 +41,8 @@ enum WeekdayStyle {
 
 func weekdayStyle(for language: Language) -> WeekdayStyle {
     switch language {
-    case .en, .fr, .ja, .ko: return .abbreviated
+    case .en, .ja, .ko: return .abbreviated
+    case .fr: return .standaloneShort
     // Standard abbreviations blow the 3-char budget or collide, so declare them:
     case .de: return .declared(["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"])
     case .da, .nb: return .declared(["Sø", "Ma", "Ti", "On", "To", "Fr", "Lø"])
@@ -56,6 +57,7 @@ func compactWeekdays(for language: Language) -> [String] {
     case .declared(let symbols):
         return symbols
     case .abbreviated, .standaloneShort:
+        // Simplified: the real rulebook formats dates with the "E" / "cccccc" patterns.
         var cal = Calendar(identifier: .gregorian)
         cal.locale = Locale(identifier: language.rawValue)
         return cal.shortStandaloneWeekdaySymbols  // Sun…Sat for the demo
@@ -66,7 +68,7 @@ func compactWeekdays(for language: Language) -> [String] {
     for language in Language.allCases {
         let labels = compactWeekdays(for: language)
         for label in labels {
-            #expect(label.count <= 3, "\(language.rawValue): \(label)")
+            #expect(label.count <= 3 && label.unicodeScalars.count <= 3, "\(language.rawValue): \(label)")
             #expect(label.unicodeScalars.allSatisfy { $0.properties.isAlphabetic || ("0"..."9").contains(Character($0)) },
                     "\(language.rawValue): \(label)")
         }
@@ -137,8 +139,8 @@ struct StatWidthTests {
         // …one row per language
     ]
 
-    private func resolved(_ key: String, _ language: String) -> String {
-        var resource = LocalizedStringResource(String.LocalizationValue(key), bundle: .main)
+    private func resolved(_ resource: LocalizedStringResource, _ language: String) -> String {
+        var resource = resource
         resource.locale = Locale(identifier: language)
         return String(localized: resource)
     }
@@ -146,15 +148,20 @@ struct StatWidthTests {
     @Test(arguments: languages)
     func pressureLineFitsTheFloorGrid(language: String) {
         let trend = Self.fallingFast[language] ?? "Falling fast"
-        for level in ["Low pressure", "Normal pressure", "High pressure"] {
-            let line = "\(resolved(level, language)) and \(trend.lowercased())."
+        for levelKey in ["Low pressure", "Normal pressure", "High pressure"] {
+            let level = resolved(LocalizedStringResource(String.LocalizationValue(levelKey), bundle: .main), language)
+            // The joiner is a catalog template too, so each language composes its own line.
+            let line = resolved(
+                LocalizedStringResource("%@ and %@.", defaultValue: "\(level) and \(trend.lowercased()).", bundle: .main),
+                language
+            )
             #expect(grade(line) != .over, "\(language): \"\(line)\"")
         }
     }
 }
 ```
 
-The second tier is a full sweep, env-gated so it never runs under CI. It grades every stat-card slot in all 27 languages against both the catalog values and the live strings from our server. Many of the widest strings are composed server-side and returned localized, so the report reads the web repo's locale files directly and pulls them in. Its output is a blessed markdown report, reviewed on every change like a copy edit. A row that is over budget on purpose is pinned by exact value in an `accepted` map, so an allowed over-budget term re-flags the instant its string changes. "This canonical term has no shorter natural form" is a legitimate outcome. "We stopped looking" is not, and pinning the value is the difference.
+The second tier is a full sweep, env-gated so it never runs under CI. It grades every stat-card slot in all 27 languages against both the catalog values and the live strings from our server. Many of the widest strings are composed server-side and returned localized, so a wrapper script converts the web repo's locale files to JSON and the report reads them in. Its output is a blessed markdown report, reviewed on every change like a copy edit. A row that is over budget on purpose is pinned by exact value in an `accepted` map, so an allowed over-budget term re-flags the instant its string changes. "This canonical term has no shorter natural form" is a legitimate outcome. "We stopped looking" is not, and pinning the value is the difference.
 
 A drift tripwire keeps the two tiers honest. It fails the build the moment the set of stat cards changes and names the files to update, so nobody can add a card that the always-on gate keeps passing while the report silently stops covering it.
 
@@ -168,23 +175,24 @@ import SwiftUI
 struct StatCard: View {
     let title: String       // e.g. "Pressure"
     let subtitle: String    // 18pt bold, very tight — "1013 hPa"
-    let description: String  // 13pt regular — "High pressure and falling fast."
+    let description: String  // 13pt regular (.footnote) — "High pressure and falling fast."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .lineLimit(1)
             Text(subtitle)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 18).weight(.bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             Text(description)
-                .font(.system(size: 13))
+                .font(.footnote)
                 .lineLimit(1)
                 .minimumScaleFactor(0.9)
         }
-        .padding(16)
+        .padding(.vertical, 18)
+        .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -215,3 +223,5 @@ The residual `OVER` rows in the full report are the ones this net catches, adjud
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the weekday rail and the six languages whose abbreviations break it, the title is one clause, Results drops the bullets that restated the Solution, and Lessons Learned is four rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The test's language array has 27 entries, so "25 more languages" became 26; French moved from the abbreviated to the standalone-short weekday style, the weekday test gained the real three-scalar cap, the pressure-line test now resolves the localized "%@ and %@." template instead of hardcoding an English joiner, the card view's fonts and padding were matched to the real cell, and the full sweep is described as reading web locales through a wrapper script's JSON conversion rather than directly.

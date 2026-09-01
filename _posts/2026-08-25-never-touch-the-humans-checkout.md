@@ -27,11 +27,13 @@ Give every agent its own checkout and its own build location, and make that the 
 
 "Be careful in the shared checkout" does not survive contact with a background agent. A git worktree is a second working directory attached to the same repository, with its own branch and its own files, sharing the one object store. The human's checkout and the agent's worktree can sit on different branches with different uncommitted changes and never touch each other's files.
 
-The rule is absolute on purpose. No edits in the main checkout at all, including plan and documentation one-liners, because a rule with a "small changes are fine" exception is one an agent will talk itself past. It is written in `AGENTS.md` and backed by a PreToolUse hook that blocks edits outside a worktree (landed 2026-08-04):
+The rule is absolute on purpose. No edits in the main checkout at all, including plan and documentation one-liners, because a rule with a "small changes are fine" exception is one an agent will talk itself past. It is written in `AGENTS.md`, which every session loads (landed 2026-08-04, replacing wording that had allowed branches in the main checkout):
 
-> All agent work happens in git worktrees — the main checkout belongs to the user and stays untouched. Each worktree is an isolated checkout of its own branch. Worktrees live under the repo's gitignored `.claude/worktrees/` directory — never as siblings of the repo.
+> The main checkout is the user's (Xcode has it open). Never work in it — no edits, no branches, no uncommitted state left behind — unless the user explicitly authorizes it in the current session. All work, including one-line plan/doc edits, happens on a branch in a worktree under `.claude/worktrees/<name>` (gitignored; never a sibling of the repo in `~/Code/helloweather`), created before the first change.
 
-A worktree that only edits text is free to create. A worktree that has to *build* needs one more step. Git only populates tracked files, so the two secret files this project keeps out of git, an API-keys xcconfig and a crash-reporter config, are missing from a fresh worktree, and `xcodebuild` fails immediately on the missing base configuration. The setup script creates the worktree, links the secrets, and sets the build-isolation variables in one go:
+The same PR first tried a PreToolUse hook that blocked edits outside a worktree. Review dropped it, so the rule is enforced by instructions, not tooling. What makes it hold is that it has no exceptions and is read at the start of every session.
+
+A worktree that only edits text is free to create. A worktree that has to *build* needs one more step. Git only populates tracked files, so the two secret files this project keeps out of git, an API-keys xcconfig and a crash-reporter config, are missing from a fresh worktree, and `xcodebuild` fails immediately on the missing base configuration. Written as one script, the setup creates the worktree, links the secrets, and sets the build-isolation variables in one go:
 
 ```bash
 #!/bin/bash
@@ -71,7 +73,7 @@ The secrets are symlinked rather than copied, so they stay gitignored and a rota
 
 The "database is locked" failure has a one-flag fix: `-derivedDataPath`, wired to an environment variable. Unset, the human's default leaves Xcode's location untouched. Set, the agent builds into a private folder.
 
-But a fully private build world per worktree is expensive. Each one would re-clone every package and recompile every file, and a fleet of worktrees would spend all day doing that. So the split follows what actually conflicts. The build *database* is per-worktree. The package checkout is shared, because it is just downloaded source. The compile cache is shared, because it is content-addressed, so a later worktree reuses an earlier worktree's compiles instead of redoing them (landed 2026-08-07 through 08). The build script passes all three to `xcodebuild`:
+But a fully private build world per worktree is expensive. Each one would re-clone every package and recompile every file, and a fleet of worktrees would spend all day doing that. So the split follows what actually conflicts. The build *database* is private: the agent path when the variable is set, Xcode's own per-workspace location otherwise. The package checkout is shared, because it is just downloaded source. The compile cache is shared, because it is content-addressed, so a later worktree reuses an earlier worktree's compiles instead of redoing them (landed 2026-08-07 through 08). The build script passes all three to `xcodebuild`; this is the real script trimmed to the flags that matter, one scheme instead of two:
 
 ```bash
 #!/bin/bash
@@ -99,13 +101,13 @@ xcodebuild build \
   COMPILATION_CACHE_CAS_PATH="$CAS_PATH"
 ```
 
-One rule the variables cannot enforce: never run two builds at once, even with separate DerivedData paths. They still contend on the shared cache in ways that corrupt it. Isolation gives each agent a safe place to build. Serialization keeps them off the shared parts.
+One rule the variables cannot enforce: never run two builds at once, even with a private DerivedData path. They still share the package checkout and the compile cache, and the rule is simply never to test what happens when two builds write to those together. Isolation gives each agent a safe place to build. Serialization keeps them off the shared parts.
 
 ### Cleanup is structural
 
-Every worktree that builds spawns roughly 6 GB of DerivedData. Ten units of work in a day is 60 GB of build cache for changes that may already be merged. Left alone, the disk fills and every build fails for a reason unrelated to any agent's code.
+Every worktree that builds spawns roughly 6 GB of DerivedData, and a full private agent cache runs about 8 GB. Ten units of work in a day is 60 GB or more of build cache for changes that may already be merged. Left alone, the disk fills and every build fails for a reason unrelated to any agent's code.
 
-A worktree is done the moment its branch is squash-merged into main. The object store keeps the history, so the working directory and its build cache are waste from then on. The cleanup script prunes stale worktree records, then deletes DerivedData for any workspace path that no longer exists. That is exactly the set left behind by removed worktrees, so it is safe to run at the end of any session:
+A worktree is done the moment its branch is squash-merged into main. The object store keeps the history, so the working directory and its build cache are waste from then on. The cleanup script prunes stale worktree records, then deletes DerivedData for any workspace path that no longer exists. That is exactly the set left behind by removed worktrees, so it is safe to run at the end of any session. Trimmed here; the real one also drops a simulator tool's caches and unavailable simulators:
 
 ```bash
 #!/bin/bash
@@ -135,10 +137,12 @@ It never deletes by age or by guesswork. It reads each DerivedData folder's reco
 
 Everything above keeps agents *out* of the human's checkout. There is one moment the human wants a branch *in* it. When they say "let me test that branch," they mean in Xcode, in the checkout they already have open, not in a worktree they would have to go find. That is the single sanctioned exception, and it is the one time the two worlds deliberately touch.
 
-The handoff has to be one-way. Once the branch is in the human's checkout, the checkout owns it. Follow-up commits happen there, and no agent runs a CLI build against it, because that would stomp the live incremental build state mid-QA. The checklist:
+The handoff has to be one-way. Once the branch is in the human's checkout, the checkout owns it. Follow-up commits happen there, and no agent runs a CLI build against it, because that would stomp the live incremental build state mid-QA. The checklist, condensed from the pull-requests skill:
 
 ```markdown
 ## QA handoff (worktree -> human's checkout)
+
+Confirm the handoff with the human first, then:
 
 1. Push the branch. Remove the worktree (the branch persists);
    check the branch out in the human's checkout. Displacing whatever
@@ -147,10 +151,15 @@ The handoff has to be one-way. Once the branch is in the human's checkout, the c
    GitHub while building the branch locally.
 3. One-way: from here the human's checkout owns this branch. Follow-up
    commits happen there, not in a recreated worktree.
-4. Never run a CLI build (xcodebuild) in the human's checkout after
-   the handoff — it stomps their live incremental build state.
-5. Never tell the human to `git pull` for follow-up commits made in
+4. Never tell the human to `git pull` for follow-up commits made in
    their own checkout — those commits are already in their working copy.
+5. Iterate conversationally: propose each follow-up as a readable diff
+   in chat and get agreement before committing. Approved changes still
+   push promptly so the PR tracks the conversation.
+6. Never run a CLI build (xcodebuild) in the human's checkout after
+   the handoff — it stomps their live incremental build state. Their
+   next Xcode build verifies the follow-up; for anything riskier than
+   a trivial change, say so, or verify in the worktree before handoff.
 ```
 
 The last item looks trivial and is not. An agent once committed a fix in the human's checkout and then told them to `git pull` to see it. The commit was already in their working copy, so there was nothing to pull, and the instruction caused real confusion. After the handoff the mental model flips: the checkout is the working copy, and the agent is a guest in it.
@@ -159,15 +168,15 @@ One smaller rule rides along on any pushed branch, handoff or not: never force-p
 
 ## Results
 
-- Branch switches, stray edits, and locked build databases in the human's checkout went from recurring interruptions to structurally impossible. The hook enforces the worktree rule, so nobody has to remember it.
-- The cost is one extra DerivedData cache, about 6 GB, per concurrent worktree. Package downloads and compiles are reused across worktrees instead of repeated.
+- Branch switches, stray edits, and locked build databases in the human's checkout went from recurring interruptions to, as of August 2026, not recurring. The worktree rule is loaded in every session rather than remembered.
+- The cost is one extra DerivedData cache, 6 to 8 GB, for each worktree that builds. Package downloads and compiles are reused across worktrees instead of repeated.
 - The human gets a tested branch in the checkout they already have open, with the PR up for review and no agent build fighting their live one.
 
 ## Lessons Learned
 
 - **Split state by whether it conflicts, not by what it is.** The build database conflicts and must be private. The package checkout and compile cache are inputs and can be shared. Treating all build state the same would have made isolation unaffordable.
-- **Isolation makes concurrency possible, not safe.** Separate DerivedData paths still share a cache, so builds are serialized. A rule the tooling cannot enforce belongs in the agent instructions.
-- **A rule with a small-change exception is not a rule.** The worktree policy holds because it covers one-line doc edits too, and because a hook enforces it rather than memory.
+- **Isolation makes concurrency possible, not safe.** A private DerivedData path still shares the package and compile caches, so builds are serialized. A rule the tooling cannot enforce belongs in the agent instructions.
+- **A rule with a small-change exception is not a rule.** The worktree policy holds because it covers one-line doc edits too, and because it is in the file every session reads rather than in memory. The mechanical hook was tried and dropped; the wording did the work.
 - **The handoff flips the agent's mental model, and the agent does not notice.** The phantom `git pull` was the symptom. After a handoff, the agent has to treat the human's working copy as the source of truth, not the branch it pushed.
 
 ---
@@ -181,3 +190,5 @@ One smaller rule rides along on any pushed branch, handoff or not: never force-p
 Ten Claude agents mined the iOS, web, and Android skills, the iOS changelog, and the plan indexes for uncovered topics; the owner picked four from the ranked list. This post was researched and drafted by one agent from the cited skills, plans, and code, under the why-then-how voice and self-contained-code brief settled in the previous localization batch, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" After a first line edit they followed up with "this looks better, but I wonder if you wanted to go farther with a more holistic rewrite instead of an editing pass?" and "agreed on the rewrite on this same post first, also holistically review and update the relevant skills etc". Claude Fable 5.1 rewrote the prose: the post now opens on the incidents, each section says its part once, Results is what changed and what it cost, and Lessons Learned holds only what the body does not already say. Code blocks, dates, and numbers are unchanged, and no facts were added. This was the pilot for a pass over the whole archive, and the standard is recorded in the blog-post-generator skill.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The PreToolUse hook never shipped: the 2026-08-04 PR tried one and dropped it in review, so the post now says the rule is enforced by AGENTS.md wording, and the quoted rule is AGENTS.md's current text rather than the pull-requests skill's paraphrase. The QA checklist was expanded to the skill's current six items, the build and cleanup scripts are labeled as trimmed from the real ones, the DerivedData cost now gives both figures in AGENTS.md (~6 GB per worktree, ~8 GB for a private agent cache), and the "structurally impossible" result is dated to August 2026.

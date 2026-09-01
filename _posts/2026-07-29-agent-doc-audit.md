@@ -2,13 +2,13 @@
 layout: post
 title: "Delete the Fiction Your Agents Believe"
 date: 2026-07-29 08:10:00 -0600
-summary: "A four-tier audit of every agent-facing doc across three repos. Wrong content is worse than no content, because agents act on it - and deleting a quarter to a third of the corpus made the agents better."
+summary: "A four-tier audit of every agent-facing doc across three repos. Wrong content is worse than no content, because agents act on it - and deleting a third to nearly half of the corpus made the agents better."
 tags: [ai-agents, documentation, skills, workflow]
 ---
 
 ## The Problem
 
-An Android billing skill listed six product IDs in two tiers, "Current plans" and "Legacy plans (still valid)". A Rails skill banned, in capital letters, a pattern seven of the app's controllers use. An iOS README described CI that had never existed in the repo's history. All three lived in agent-facing docs: the `AGENTS.md`, `CLAUDE.md`, `.claude/skills/**/SKILL.md` files, and permission settings that an agent reads before it acts.
+An Android billing skill listed six product IDs in two tiers, "Current v4 plans" and "Legacy v3 plans (still valid)". A Rails skill banned, in capital letters, a pattern seven of the app's controllers use. An iOS README described CI that had never existed in the repo's history. All three lived in agent-facing docs: the `AGENTS.md`, `CLAUDE.md`, `.claude/skills/**/SKILL.md` files, and permission settings that an agent reads before it acts.
 
 Agent docs rot the way any docs do. Someone writes a skill, the code moves, nobody re-reads the skill. For human documentation, "mostly true" is survivable. A developer reads "use the Navigation component," glances at the code, sees a custom router, and silently corrects for it. An agent reads the skill, believes it, and acts. A stale rule is not quietly ignored; it gets implemented. The worst case is the agent confidently "fixing" working code to match a doctrine that was never true here.
 
@@ -33,7 +33,7 @@ This tier goes first because a documentation audit is an agent editing the files
 - **Interpreters on the allow list.** `ruby` and `python3` were auto-allowed. A one-line `ruby -e 'system(...)'` routes around every push, deploy, and staging guard above it. Moved to ask-by-default.
 - **Blanket `find`.** `find` was allowed wholesale, which quietly includes `-exec`, `-ok`, and `-delete`. Plain `find` stays allowed; the executing and deleting forms now prompt.
 - **Mutating `curl`.** The documented intent was "read-only research." The rules didn't enforce it on both sides. Now they do.
-- **Self-escalation.** An agent with unconditional Edit and Write access could widen its own allowlist by editing the settings file. Edits to the agent's own settings files now require confirmation.
+- **Self-escalation.** An agent with unconditional Edit and Write access could widen its own allowlist by editing the settings file. One repo closed this: edits to the agent's own settings files now require confirmation there.
 - **An empty deny list.** One repo's deny array was literally `[]`, so pushes to `main` were ask-only.
 
 One more turned up in a machine-local settings file that is not in version control: a read grant covering the entire home directory. Silent, unprompted reads of everything outside the project. Worth checking for specifically, because it lives in the file nobody reviews.
@@ -42,7 +42,7 @@ One more turned up in a machine-local settings file that is not in version contr
 
 ### Invented product IDs in the billing path
 
-The Android billing skill documented a `ProductIds` object: six constants across two labeled tiers, "Current plans" and "Legacy plans (still valid)", with a derived `ALL_ACTIVE` list. Every string in it was invented:
+The Android billing skill documented a `ProductIds` object: six constants across two labeled tiers, "Current v4 plans" and "Legacy v3 plans (still valid)", with a derived `ALL_ACTIVE` list. Every string in it was invented:
 
 ```kotlin
 // Deleted. Real SKUs replaced with placeholders here;
@@ -58,7 +58,7 @@ Grepping the entire tree for those strings returned three hits, all inside the s
 
 The replacement skill opens by naming its own source of truth and conceding to it:
 
-> All billing knowledge here is derived from the source of truth: `FanClubHelper.kt` (SKUs + entitlement logic) and `PaymentProcessor.kt` (Billing Library client). If this file and the code disagree, the code wins - update this file.
+> All billing knowledge here is derived from the source of truth: `feature/fanclub/FanClubHelper.kt` (SKUs + entitlement logic) and `app/PaymentProcessor.kt` (Billing Library client). If this file and the code disagree, the code wins - update this file.
 
 ### Architecture claims the source contradicts
 
@@ -107,19 +107,19 @@ Both the iOS and web PR skills instructed the agent to append this to its own pu
 
 An agent grading its own work an A- and declaring it ready to merge is a confidence signal with no information content. It degrades human review by putting a green checkmark where scrutiny should go.
 
-The same two skills carried an "Examples from Recent PRs" section citing PR #145, #144, and #132 as templates to study. The web repo was at #1600 at the time. Those numbers point at real PRs, just entirely different ones, about weather forecast views rather than the subjects named. The section advising agents not to name your own app in upstream open-source PRs named the wrong app while doing it.
+The same two skills carried an "Examples from Recent PRs" section citing PR #145, #144, and #132 as templates to study. The web repo was at #1600 at the time. In the iOS repo those numbers point at real PRs, just entirely different ones: forecast views, JSON encoders, and a color manager rather than the subjects named. The section advising agents not to name your own app in upstream open-source PRs named the wrong app while doing it.
 
 ### Infrastructure that never existed
 
 The iOS README stated: "Tests are automatically run on GitHub Actions for pull requests and pushes to main." There was no `.github/` directory, and there never had been one in the repo's history. (Twelve days after the audit, CI was actually built. On July 16, the claim was false.)
 
-Android's `AGENTS.md` had a "Pending Upgrades" section listing "Target SDK 35: required by August 31, 2025." The deadline was eleven months in the past, and the requirement itself was two SDK generations stale. It was replaced with a single line pointing at the one file that tracks deadlines, plus a warning not to trust version claims found elsewhere.
+Android's `AGENTS.md` had a "Pending Upgrades" section listing "Target SDK 35: required by August 31, 2025." The deadline was ten and a half months in the past, and the requirement itself was one SDK generation stale. It was replaced with a single line pointing at the one file that tracks deadlines, plus a warning not to trust version claims found elsewhere.
 
 ### Restated defaults, and skills that never loaded
 
 A ~230-word section titled "AI Assistant Self-Reflection and Critical Thinking" instructed the agent to "maintain a stance of being extraordinarily skeptical of your own correctness" and "live in constant fear of being wrong," with subsections on red-teaming its own code. This is what the model does anyway, and it sat in an always-loaded file. Deleted.
 
-Two skills, one on Android and one on web, had no YAML frontmatter at all. With no `name` or `description`, the listing degrades to the bare title and keyword triggering never fires. Both had been effectively invisible for months, and nothing surfaced an error.
+Three skills, one in each repo, had no YAML frontmatter at all. With no `name` or `description`, the listing degrades to the bare title and keyword triggering never fires. All three had been effectively invisible for months, and nothing surfaced an error.
 
 One more breaks only on someone else's machine. A web skill was tracked in git as lowercase `skill.md` while all 33 of its siblings were `SKILL.md`. On a case-insensitive filesystem it resolves fine. On a case-sensitive checkout, Linux CI or a case-sensitive volume, that skill does not exist.
 
@@ -129,7 +129,7 @@ With the fiction gone, the next problem is the same truth stated in four places,
 
 The fix is mechanical: pick the canonical owner, delete the copies, leave pointers. For rules, the owner is the always-loaded file, `AGENTS.md`, and skills keep only their skill-specific additions. On iOS, the widget and watch skills each carried a ~45-line generic crash-prevention section that was textbook Swift, not project knowledge. Each collapsed to one sentence plus the unique parts: the fixed-slot `safeCount` pattern for widgets, and for the watch, the framing that matters:
 
-> The canonical rules live in AGENTS.md "Crash Prevention (Non-Negotiable)". They apply doubly here: a watch crash often presents as a complication that silently stops updating.
+> The canonical rules live in AGENTS.md "Crash Prevention (Non-Negotiable)" - no force unwraps, no unguarded indexing/casts/division, fallbacks for missing API data. They apply doubly here: a watch crash often presents as a complication that silently stops updating.
 
 While rewriting that section we found the watch skill's own crash-prevention example doing this:
 
@@ -149,18 +149,25 @@ On web the same pass took `AGENTS.md` down 18%, including one ~200-word bullet o
 
 The last tier asks a harder question of every remaining paragraph: does the model already know this?
 
-iOS had two conventions skills, `swift-conventions` and `swiftui-conventions`, totaling 2,671 words. Most of it was stock knowledge: deprecated-to-modern API tables, a Swift concurrency tutorial, a string formatting reference:
+iOS had two conventions skills, `swift-conventions` and `swiftui-conventions`, totaling 2,671 words. Most of it was stock knowledge: deprecated-to-modern API lists, a Swift concurrency tutorial, a string formatting reference:
 
-```markdown
-| Deprecated | Modern Replacement |
-|------------|-------------------|
-| `foregroundColor()` | `foregroundStyle()` |
-| `NavigationStack` | ... |
+```swift
+// ❌ Deprecated
+.foregroundColor(.red)
+.cornerRadius(8)
+NavigationView { }
+.accentColor(.blue)
+
+// ✅ Modern (iOS 15+)
+.foregroundStyle(.red)
+.clipShape(.rect(cornerRadius: 8))
+NavigationStack { }
+.tint(.blue)
 ```
 
 The model has known this for years, and paying tokens to tell it costs context that project-specific rules need. The two merged into one 587-word skill, a 78% cut, framed by a sentence that states the policy:
 
-> Stock modern-API knowledge is assumed - this file records only project decisions.
+> Stock modern-API knowledge (prefer `foregroundStyle`, `NavigationStack`, `clipShape(.rect(cornerRadius:))`, `Task.sleep(for:)`, etc.) is assumed - this file records only project decisions.
 
 What survived is what no model could know: this project deliberately stays on `ObservableObject` rather than migrating to `@Observable` (verified: ~27 files use it, zero use the newer macro), and the exact exception to the ForEach-identity rule that fixed forecast slots depend on.
 
@@ -183,15 +190,15 @@ One Tier 3 item isn't about skills at all: personal contact details for the busi
 
 | Repo | Skills | Corpus words | Change |
 |---|---|---|---|
-| Web | 34 → 28 | 40,658 → 31,140 | −23% |
-| iOS | 27 → 22 | ~28,000 → ~21,000 | −25% |
+| Web | 34 → 28 | 45,459 → 31,140 | −31% |
+| iOS | 27 → 22 | 30,535 → 20,437 | −33% |
 | Android | 7 → 5 | 5,847 → 3,111 | −47% |
 
 On Android, `AGENTS.md` also dropped ~300 words with zero loss of project-specific signal. On iOS, individual skill rewrites went further, the PR skill from 1,894 to 901 words.
 
-One cost was hiding in the frontmatter. iOS skill descriptions, the blurbs that load at session start before any skill is selected, totaled roughly 4,000 words. One skill's description alone ran ~120 words. That is paid on every session whether or not any skill is used, and trimming a description to two sentences is free.
+One cost was hiding in the frontmatter. iOS skill frontmatter, the blurbs that load at session start before any skill is selected, totaled roughly 1,100 words. One skill's description alone ran ~90 words. That is paid on every session whether or not any skill is used, and trimming a description to two sentences is free.
 
-Deleting a quarter to a third of the agent docs made the agents better, not merely no worse. Every deleted fiction is a class of confident wrong action that can no longer happen, and every deleted paragraph of stock knowledge is context returned to project-specific rules.
+Deleting a third to nearly half of the agent docs made the agents better, not merely no worse. Every deleted fiction is a class of confident wrong action that can no longer happen, and every deleted paragraph of stock knowledge is context returned to project-specific rules.
 
 The pattern outlived the audit. Two weeks later, a routine PR in the web repo moved a section out of the README and into a dedicated skill, unprompted. Single-source became the default reflex rather than a cleanup task.
 
@@ -213,3 +220,5 @@ The pattern outlived the audit. Two weeks later, a routine PR in the web repo mo
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on three of the findings instead of a general observation about documentation rot, the Tier 1 catalogue is grouped under six subheadings, the follow-up PR that had been a lesson moved to Results, and Lessons Learned is down from eight rules to four. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The Results table now measures the whole audit for every repo (web 45,459 → 31,140, iOS 30,535 → 20,437, counted the same way as Android) where it had used Tier 3-only figures for web and iOS, and the "quarter to a third" framing became "a third to nearly half"; the iOS frontmatter cost was overstated (about 1,100 words in total and ~90 for the longest description, not 4,000 and ~120). The billing tier labels, the billing and watch and Swift-conventions quotes, and the deprecated-API excerpt (a Swift code block in the real skill, not a table) now match the source verbatim; the frontmatter-less skill count is three (one per repo), the Target SDK deadline is one generation stale and ten and a half months past, the self-escalation fix is credited to the one repo that made it, and the misattributed PR examples are described by their real iOS subjects.

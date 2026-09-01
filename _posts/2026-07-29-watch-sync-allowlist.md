@@ -23,7 +23,7 @@ nonisolated var keys: [String] {
 }
 
 func getDictionaryRepresentation() -> [String: Any] {
-    store.dictionaryRepresentation().filter { (key, _) in keys.contains(key) }
+    store.dictionaryRepresentation().filter { (key, val) in keys.contains(key) }
 }
 ```
 
@@ -49,7 +49,7 @@ Roughly 25 keys belonged. About 50 were pure payload, bytes that had never been 
 
 Three findings a quick eyeball would have gotten wrong, in both directions:
 
-- **Six notification toggles looked phone-only. They aren't.** Each maps to an iOS notification category, so excluding them was the obvious call. But a helper ORs all six into a single "notifications on?" boolean, and the watch's location service branches on it: `requestAlwaysAuthorization()` versus `requestWhenInUseAuthorization()`. Dropping six booleans would have silently downgraded the watch's location authorization request for every user with notifications enabled.
+- **Four notification toggles looked phone-only. They aren't.** Each maps to an iOS notification category, so excluding them was the obvious call. But a helper ORs all six push toggles into a single "notifications on?" boolean, and the watch's location service branches on it: `requestAlwaysAuthorization()` versus `requestWhenInUseAuthorization()`. Dropping four booleans would have silently downgraded the watch's location authorization request for every user with notifications enabled.
 - **A key written on the watch but never read there.** The watch stores the device location, then geocodes its own copy anyway. Every reader of the stored value is phone-only UI. It is a genuine trim candidate, and we kept it, because dropping it is an unforced behavior change with no upside. "Unused" and "safe to remove in this PR" are different questions.
 - **A flag whose only reader is compiled out today.** The feature it gates isn't available on watchOS yet, so the read sits inside a `#if canImport(...)` that never fires there. But the code path that consults it runs unconditionally in watch context, so the key goes live the day the framework arrives. Enrolled ahead of time.
 
@@ -94,7 +94,7 @@ So the allowlist and the deletion semantics had to change in the same commit. Th
 enum Keys: String {
     // ...all ~90 storage keys...
 
-    // Watch sync is opt-in: see plans/watch-sync-allowlist.md before adding here.
+    // Watch sync is opt-in: see the watch-app skill before adding here (#1336).
     static let synced: Set<Keys> = [
         .weather,
         .selectedLocation,
@@ -157,6 +157,9 @@ func syncPayloadFiltersToAllowlist() {
     let payload = SavedDataManager.shared.syncPayload()
 
     #expect(payload[marker] == nil)
+    #expect(payload.keys.allSatisfy { key in
+        SavedDataManager.Keys.synced.contains { $0.rawValue == key }
+    })
     #expect(payload[SavedDataManager.Keys.temperatureUnit.rawValue] != nil)
 }
 ```
@@ -215,3 +218,5 @@ When you invert a default, the failure mode moves. Denylist fails by shipping to
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and plan docs, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the preview-cache key that exposed the bug, the title lost its subtitle, the three audit findings became a list, the bolded closer in the dead-picker section became plain prose, and Lessons Learned dropped the three bullets the body already states. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The notification-toggle finding said six toggles were nearly dropped; the plan's re-verification record shows two were already on the list and four were the near-miss, so the count is now four (the helper still ORs all six). The allowlist comment in the shipped-shape excerpt now matches the current source, which points at the watch-app skill rather than a since-deleted plan doc; the old-protocol filter closure and the payload test were aligned with the real code (the test's allowlist-membership assertion was missing from the excerpt).

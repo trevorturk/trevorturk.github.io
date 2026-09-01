@@ -2,13 +2,13 @@
 layout: post
 title: "StoreKit 2 Implementation Guide"
 date: 2026-03-05 08:00:00 -0600
-summary: "A production StoreKit 2 implementation with nothing hidden: verified transactions, two update streams, a persisted record that widgets and the watch app can read, a guard against downgrading on a stale flag, and paywall UI built on ProductView."
+summary: "A production StoreKit 2 implementation with nothing hidden: verified transactions, two update streams, a persisted record that widgets can read and a flag that reaches the watch, a guard against downgrading on a stale flag, and paywall UI built on ProductView."
 tags: [swift, ios, storekit, subscriptions, in-app-purchase]
 ---
 
 ## The Problem
 
-Three processes need to know whether the user has paid: the app, its widgets, and the watch app. The app talks to the App Store and writes what it learns to shared storage. The other two read from there, so the stored answer has to be right, including on a cold launch before the App Store has been asked.
+Three processes need to know whether the user has paid: the app, its widgets, and the watch app. The app talks to the App Store and writes what it learns to app-group storage. Widgets read it directly; the watch app gets the `paid` flag over WatchConnectivity into its own copy of the same store. Neither calls StoreKit, so the stored answer has to be right, including on a cold launch before the App Store has been asked.
 
 StoreKit 2 verifies every transaction cryptographically and hands the rest back to the app:
 
@@ -192,13 +192,16 @@ func fetchProducts() async {
             for: StoreManager.Plan.allPaywall
         )
         storeManager.products = products
+
+        let yearly = products.first { $0.id == StoreManager.Plan.yearly }
+        storeManager.introEligible = await yearly?.subscription?.isEligibleForIntroOffer
     } catch {
         Logger.error("fetchProducts: \(error.localizedDescription)")
     }
 }
 ```
 
-Paid users skip it. They never see the paywall.
+Paid users skip it. They never see the paywall. `introEligible` is the yearly product's intro-offer eligibility; Apple grants one intro offer per subscription group per account, so the paywall uses it to drop the free-trial copy for anyone who has already used theirs.
 
 ---
 
@@ -215,9 +218,23 @@ class StoreManager: ObservableObject {
     static let shared = StoreManager()
 
     private lazy var savedDataManager = SavedDataManager.shared
+    private lazy var settingsManager = SettingsManager.shared
+    private lazy var syncService = SyncService.shared
 
     var products: [StoreKit.Product] = [] {
         didSet { objectWillChange.send() }
+    }
+
+    var introEligible: Bool? {
+        didSet { objectWillChange.send() }
+    }
+
+    private var yearlyProduct: StoreKit.Product? {
+        products.first { $0.id == Plan.yearly }
+    }
+
+    var yearlyDisplayPrice: String? {
+        yearlyProduct?.displayPrice
     }
 
     private let maxTransactions = 9999
@@ -270,10 +287,53 @@ enum Plan {
     static var allPaywall: [String] {
         paywallIndividual + paywallFamily
     }
+
+    static var allYearly: [String] {
+        [yearly, yearly_family]
+    }
+
+    static func isYearly(_ id: String) -> Bool {
+        allYearly.contains(id)
+    }
 }
 ```
 
 The legacy IDs are in `allActive` but in neither paywall list, so an old purchase still unlocks the app and the plan cannot be bought again.
+
+Two static helpers turn an ID into a title. `planTitle` labels history rows (every legacy plan was a family plan); `planTitleBase` drops the family suffix for the paywall cards. `localized` is the app's String Catalog lookup.
+
+```swift
+static func planTitle(_ id: String?) -> String {
+    switch id {
+    case Plan.monthly:  return localized("Monthly")
+    case Plan.yearly:   return localized("Yearly")
+    case Plan.lifetime: return localized("Lifetime")
+
+    case Plan.monthly_family:  return localized("Monthly (Family)")
+    case Plan.yearly_family:   return localized("Yearly (Family)")
+    case Plan.lifetime_family: return localized("Lifetime (Family)")
+
+    case Plan.v3_monthly_1, Plan.v3_monthly_2:   return localized("Monthly (Family)")
+    case Plan.v3_yearly_1, Plan.v3_yearly_2:     return localized("Yearly (Family)")
+    case Plan.v3_lifetime_1, Plan.v3_lifetime_2: return localized("Lifetime (Family)")
+
+    default: return localized("Unknown")
+    }
+}
+
+static func planTitleBase(_ id: String?) -> String {
+    switch id {
+    case Plan.monthly, Plan.monthly_family, Plan.v3_monthly_1, Plan.v3_monthly_2:
+        return localized("Monthly")
+    case Plan.yearly, Plan.yearly_family, Plan.v3_yearly_1, Plan.v3_yearly_2:
+        return localized("Yearly")
+    case Plan.lifetime, Plan.lifetime_family, Plan.v3_lifetime_1, Plan.v3_lifetime_2:
+        return localized("Lifetime")
+    default:
+        return localized("Unknown")
+    }
+}
+```
 
 ### The Paid Flag
 
@@ -294,9 +354,24 @@ var paid: Bool {
 var unpaid: Bool {
     !paid
 }
+
+var hasUpdatedCurrentEntitlements: Bool {
+    get {
+        savedDataManager.store.bool(
+            forKey: SavedDataManager.Keys.hasUpdatedCurrentEntitlements.rawValue
+        )
+    }
+    set {
+        savedDataManager.store.set(
+            newValue,
+            forKey: SavedDataManager.Keys.hasUpdatedCurrentEntitlements.rawValue
+        )
+        objectWillChange.send()
+    }
+}
 ```
 
-Feature gates in SwiftUI read `unpaid` through an `@ObservedObject`:
+`hasUpdatedCurrentEntitlements` is persisted too, so it survives a relaunch. Feature gates in SwiftUI read `unpaid` through an `@ObservedObject`:
 
 ```swift
 if storeManager.unpaid {
@@ -313,9 +388,11 @@ func handlePaidChange(oldValue: Bool, newValue: Bool) {
     switch (oldValue, newValue) {
     case (false, true):
         // User just subscribed
-        if settingsManager.showOnboarding {
-            settingsManager.apiSource = settingsManager.apiSourceDefault(paid: true)
-            syncService.sync()
+        Task {
+            if settingsManager.showOnboarding {
+                settingsManager.apiSource = settingsManager.apiSourceDefault(paid: true)
+                syncService.sync()
+            }
         }
 
     case (true, false):
@@ -325,22 +402,24 @@ func handlePaidChange(oldValue: Bool, newValue: Bool) {
             return
         }
 
-        settingsManager.apiSource = settingsManager.apiSourceDefault(paid: false)
-        savedDataManager.store.removeObject(forKey: SavedDataManager.Keys.radarLayer.rawValue)
-        await PushManager.shared.pushEnabledChanged()
-        syncService.sync()
+        Task {
+            settingsManager.apiSource = settingsManager.apiSourceDefault(paid: false)
+            savedDataManager.store.removeObject(forKey: SavedDataManager.Keys.radarLayer.rawValue)
+            await PushManager.shared.pushEnabledChanged()
+            syncService.sync()
+        }
 
-    default:
-        break
+    case (false, false), (true, true):
+        break  // Logged only
     }
 }
 ```
 
-Notice the guard on `hasUpdatedCurrentEntitlements`. On a cold launch the persisted `paid` flag may be stale, and without it the app would strip features before the App Store had been consulted. Downgrades wait for the initial sync; upgrades never do.
+The side effects run inside a `Task` because `pushEnabledChanged()` is async and the `paid` setter is not. Notice the guard on `hasUpdatedCurrentEntitlements`. On a cold launch the persisted `paid` flag may be stale, and without it the app would strip features before the App Store had been consulted. Downgrades wait for the initial sync; upgrades never do.
 
 ### Transaction Persistence
 
-Transactions are JSON in UserDefaults under an app group, so widgets and the watch app read the same list.
+Transactions are JSON in UserDefaults under an app group, so widgets read the same list. `JSONDecoder.decoder` and `JSONEncoder.encoder` are shared instances with the `.iso8601` date strategy.
 
 ```swift
 var transactions: [TransactionRecord] {
@@ -348,14 +427,14 @@ var transactions: [TransactionRecord] {
         guard let val = savedDataManager.store.data(
             forKey: SavedDataManager.Keys.transactions.rawValue
         ) else { return [] }
-        return (try? JSONDecoder().decode(
+        return (try? JSONDecoder.decoder.decode(
             [TransactionRecord].self,
             from: val
         )) ?? []
     }
     set {
         let normalized = normalizedTransactions(newValue)
-        guard let val = try? JSONEncoder().encode(normalized) else { return }
+        guard let val = try? JSONEncoder.encoder.encode(normalized) else { return }
         savedDataManager.store.set(val, forKey: SavedDataManager.Keys.transactions.rawValue)
         transactionsDidChange()
         objectWillChange.send()
@@ -376,6 +455,30 @@ func transactionsDidChange() {
 ```
 
 `process(transaction:)` replaces by ID, so a transaction delivered by both streams produces one record. Every write recomputes `paid`, so the flag cannot drift from the list.
+
+The watch is a separate device, so it cannot read this app group. The phone sends `paid` (not the list) in its WatchConnectivity application context, and the watch writes it into its own app-group defaults under the same key. Until the first sync lands, the watch assumes paid rather than flash a paywall.
+
+```swift
+class WatchStoreManager: ObservableObject {
+    private static let sharedStore = UserDefaults(suiteName: SavedDataManager.appGroup)!
+
+    var store: UserDefaults { Self.sharedStore }
+
+    var paid: Bool {
+        store.bool(forKey: SavedDataManager.Keys.paid.rawValue)
+    }
+
+    var paidWatch: Bool {
+        if store.object(forKey: SavedDataManager.Keys.paid.rawValue) == nil {
+            return true  // Not synced yet: optimistic default
+        } else {
+            return paid
+        }
+    }
+}
+```
+
+Simplified: the real `paidWatch` also grandfathers users migrated from the previous app version.
 
 ### Computed Entitlement Properties
 
@@ -429,13 +532,15 @@ var paidStatus: PaidStatus {
         return .subscribed
     } else if paid {
         return .cancelling
-    } else if hasPaid {
+    } else if transactions.isNotEmpty {
         return .cancelled
     } else {
         return .unpaid
     }
 }
 ```
+
+`.cancelled` means the list has records but none is active: the user paid once and no longer does.
 
 ---
 
@@ -463,6 +568,7 @@ struct TransactionRecord: Codable, Identifiable, Equatable {
     let willAutoRenew: Bool?
     let currency: String?
     let price: Decimal?
+    let gracePeriodExpirationDate: Date?
 
     init(transaction: Transaction,
          renewalInfo: StoreKit.Product.SubscriptionInfo.RenewalInfo?) {
@@ -481,16 +587,29 @@ struct TransactionRecord: Codable, Identifiable, Equatable {
         self.willAutoRenew = renewalInfo?.willAutoRenew
         self.currency = transaction.currency?.identifier
         self.price = transaction.price
+        self.gracePeriodExpirationDate = renewalInfo?.gracePeriodExpirationDate
+    }
+
+    var formattedPrice: String? {
+        guard let price = price, let currency = currency else { return nil }
+
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency
+
+        return formatter.string(from: price as NSDecimalNumber)
     }
 }
 ```
+
+`gracePeriodExpirationDate` comes from the renewal info, alongside `willAutoRenew`, and is set only while a renewal is failing.
 
 ### Determining Active Status
 
 A transaction is active when all three hold:
 - Its product ID is in the list of valid products
 - It has not been revoked (refunded)
-- It has not expired, for subscriptions
+- It has not expired, for subscriptions, or is inside a billing grace period
 
 ```swift
 var active: Bool {
@@ -499,6 +618,10 @@ var active: Bool {
     }
     guard revocationDate == nil else {
         return false
+    }
+
+    if let gracePeriodExpirationDate, Date() < gracePeriodExpirationDate {
+        return true
     }
 
     if let expirationDate = expirationDate {
@@ -517,7 +640,7 @@ var lifetime: Bool {
 }
 ```
 
-A record with no expiration date is a lifetime purchase and stays active until revoked.
+A record with no expiration date is a lifetime purchase and stays active until revoked. A subscription whose renewal is failing stays active until its grace date passes, so the user is not locked out while Apple retries the charge.
 
 ### Revocation Handling
 
@@ -551,6 +674,7 @@ import StoreKit
 
 @MainActor
 struct PaywallView: View {
+    @ObservedObject private var appViewModel = AppViewModel.shared
     @ObservedObject private var storeManager = StoreManager.shared
 
     @State private var showPlans: Bool = false
@@ -561,10 +685,19 @@ struct PaywallView: View {
         VStack(spacing: 16) {
             // Hero content...
 
-            Text("Try 1 week free, then \(storeManager.yearlyDisplayPrice ?? "...")/year")
+            if storeManager.introEligible == false {
+                Text("Subscribe for \(storeManager.yearlyDisplayPrice ?? "...")/year.")
+            } else {
+                Text("Try 1 week free, then \(storeManager.yearlyDisplayPrice ?? "...")/year after that.")
+            }
+            Text("Your plan will auto-renew until canceled.")
 
             ProductView(id: StoreManager.Plan.yearly)
-                .productViewStyle(TrialButton(buttonText: "Try 1 week free"))
+                .productViewStyle(TrialButton(
+                    buttonText: storeManager.introEligible == false
+                        ? "Subscribe"
+                        : "Try 1 week free"
+                ))
 
             HStack {
                 Text("See All Plans")
@@ -585,25 +718,31 @@ struct PaywallView: View {
                 }
             }
         }
-        .alert("No active purchases found.", isPresented: $showRestoreNoPurchases) {
+        .alert("Sorry, but we couldn't find any active purchases for your current App Store account.",
+               isPresented: $showRestoreNoPurchases) {
             Button("Done", action: {})
         }
-        .alert("Couldn't connect to App Store.", isPresented: $showRestoreSyncFailed) {
+        .alert("Sorry, but we couldn't connect to the App Store. Please check your connection and try again.",
+               isPresented: $showRestoreSyncFailed) {
             Button("Done", action: {})
         }
         .onChange(of: storeManager.paid) {
             guard storeManager.paid == true else { return }
-            // Dismiss paywall on successful purchase
+
+            SyncService.shared.sync()
+
+            appViewModel.showPaywallSheet = false
+            appViewModel.showPaywallFullScreenCover = false
         }
     }
 }
 ```
 
-The Restore button separates two outcomes that look identical to the user: the App Store could not be reached, and it was reached and had nothing. Dismissal keys off `storeManager.paid` changing, not a purchase callback, so a purchase that completes by any route closes the paywall.
+The Restore button separates two outcomes that look identical to the user: the App Store could not be reached, and it was reached and had nothing. Dismissal keys off `storeManager.paid` changing, not a purchase callback, so a purchase that completes by any route closes the paywall. The trial copy switches on `introEligible == false` only; `nil` means eligibility is unknown, and the trial copy stays.
 
 ### Custom ProductViewStyle
 
-While loading, the style shows the real button redacted. On success it wraps the same button around `configuration.purchase()`.
+While loading, the style shows the real button redacted (the real one also shimmers, through a third-party modifier). On success it wraps the same button around `configuration.purchase()`.
 
 ```swift
 struct TrialButton: ProductViewStyle {
@@ -679,7 +818,7 @@ struct PaywallPlansView: View {
 
 ### Selectable Plan Style
 
-On success the style holds the real product, so the card shows the App Store's localized `displayPrice`. A plan that fails to load disappears rather than showing an error.
+On success the style holds the real product, so the card shows the App Store's localized `displayPrice`. A plan that fails to load shows the same error button as the trial button, so the row never silently loses a card.
 
 ```swift
 struct SelectablePlanStyle: ProductViewStyle {
@@ -688,28 +827,36 @@ struct SelectablePlanStyle: ProductViewStyle {
     func makeBody(configuration: Configuration) -> some View {
         switch configuration.state {
         case .loading:
-            PlanCard(selected: $selected, id: "", title: "Loading", price: "...")
+            PlanCard(selected: $selected, id: "", title: "Loading", price: "Loading", badgeText: nil)
 
         case .success(let product):
             Button(action: { selected = product.id }) {
                 PlanCard(
                     selected: $selected,
                     id: product.id,
-                    title: StoreManager.planTitle(product.id),
+                    title: StoreManager.planTitleBase(product.id),
                     price: product.displayPrice,
-                    badgeText: StoreManager.Plan.isYearly(product.id)
-                        ? "Best deal"
-                        : nil
+                    badgeText: badgeText(for: product.id)
                 )
             }
             .buttonStyle(.plain)
 
-        case .failure, .unavailable:
-            EmptyView()
+        case .failure(let error):
+            let _ = Logger.error(error.localizedDescription)
+            PurpleButton(text: "Sorry, an error occurred.", error: true)
+
+        case .unavailable:
+            PurpleButton(text: "Sorry, an error occurred.", error: true)
 
         @unknown default:
-            EmptyView()
+            PurpleButton(text: "Sorry, an error occurred.", error: true)
         }
+    }
+
+    private func badgeText(for id: String) -> LocalizedStringKey? {
+        guard StoreManager.Plan.isYearly(id) else { return nil }
+
+        return "Best deal"
     }
 }
 ```
@@ -753,55 +900,95 @@ struct TransactionsView: View {
 
 ### Transaction Detail with Refund Request
 
-The detail view reads only the persisted record. Request Refund opens Apple's `refundRequestSheet` for that transaction ID.
+The detail view reads only the persisted record. Request Refund opens Apple's `refundRequestSheet` for that transaction ID. The row labels go through `localized()` in the real file.
 
 ```swift
 struct TransactionDetailView: View {
     let transaction: TransactionRecord
 
+    @Environment(\.dismiss) private var dismiss
+
     @State private var refundRequestSheetIsPresented = false
 
     var body: some View {
-        List {
-            Section("Status") {
-                DetailRow(title: "Status",
-                         value: transaction.active ? "Active" : "Inactive")
-            }
-
-            Section("Transaction Details") {
-                DetailRow(title: "Product",
-                         value: StoreManager.planTitle(transaction.productID))
-                DetailRow(title: "Type", value: transaction.productType)
-                DetailRow(title: "ID", value: transaction.id?.description)
-                DetailRow(title: "Environment", value: transaction.environment)
-                DetailRow(title: "Price", value: transaction.formattedPrice)
-                DetailRow(title: "Will Auto Renew",
-                         value: transaction.willAutoRenew?.description)
-            }
-
-            Section("Dates") {
-                DetailRow(title: "Purchase Date",
-                         value: transaction.purchaseDate?.formatted())
-                if let expiration = transaction.expirationDate {
-                    DetailRow(title: "Expiration", value: expiration.formatted())
+        NavigationView {
+            List {
+                Section("Status") {
+                    DetailRow(title: "Status",
+                             value: transaction.active ? "Active" : "Inactive")
                 }
-                if let revocation = transaction.revocationDate {
-                    DetailRow(title: "Revoked", value: revocation.formatted())
-                    DetailRow(title: "Reason",
-                             value: transaction.revocationReasonString)
-                }
-            }
 
-            Section("Manage") {
-                Button("Request Refund") {
-                    refundRequestSheetIsPresented = true
+                Section("Transaction Details") {
+                    DetailRow(title: "Product",
+                             value: StoreManager.planTitle(transaction.productID))
+                    DetailRow(title: "Type", value: transaction.productType)
+                    DetailRow(title: "ID", value: transaction.id?.description)
+
+                    if transaction.id != transaction.originalID {
+                        DetailRow(title: "Original ID",
+                                 value: transaction.originalID?.description)
+                    }
+
+                    DetailRow(title: "Web ID", value: transaction.webOrderLineItemID)
+                    DetailRow(title: "Environment", value: transaction.environment)
+                    DetailRow(title: "Price", value: transaction.formattedPrice)
+                    DetailRow(title: "Ownership Type", value: transaction.ownershipType)
+                    DetailRow(title: "Will Auto Renew",
+                             value: transaction.willAutoRenew?.description)
+                }
+
+                Section("Dates") {
+                    DetailRow(title: "Purchase Date",
+                             value: transaction.purchaseDate?.formatted())
+
+                    if transaction.purchaseDate != transaction.originalPurchaseDate {
+                        DetailRow(title: "Original Purchase",
+                                 value: transaction.originalPurchaseDate?.formatted())
+                    }
+
+                    if let expirationDate = transaction.expirationDate {
+                        DetailRow(title: "Expiration Date", value: expirationDate.formatted())
+                    }
+
+                    if let revocationDate = transaction.revocationDate {
+                        DetailRow(title: "Revocation Date", value: revocationDate.formatted())
+                        DetailRow(title: "Revocation Reason",
+                                 value: transaction.revocationReasonString)
+                    }
+                }
+
+                Section("Manage") {
+                    Button("Request Refund") {
+                        refundRequestSheetIsPresented = true
+                    }
                 }
             }
+            .navigationTitle("Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .refundRequestSheet(
+                for: transaction.id ?? 0,
+                isPresented: $refundRequestSheetIsPresented
+            )
         }
-        .refundRequestSheet(
-            for: transaction.id ?? 0,
-            isPresented: $refundRequestSheetIsPresented
-        )
+    }
+}
+
+private struct DetailRow: View {
+    let title: String
+    let value: String?
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value ?? "-")
+                .foregroundColor(.secondary)
+        }
     }
 }
 ```
@@ -810,19 +997,43 @@ struct TransactionDetailView: View {
 
 ## Initialization
 
-StoreService is activated once, from the app's `init`.
+StoreService is activated once, from a `.task` on the root view, after data migrations have run. The app shows a loading view until `AppMonitor` flips `ready`. Simplified: onboarding and the other services are omitted.
 
 ```swift
 @main
+@MainActor
 struct HelloWeatherApp: App {
-    init() {
-        AppMonitor.activate()  // Calls StoreService.shared.activate()
-    }
+    @StateObject private var appMonitor = AppMonitor.shared
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if appMonitor.ready {
+                    AppContainerView()
+                } else {
+                    AppLoadingView()
+                }
+            }
+            .task {
+                await appMonitor.activate()
+            }
         }
+    }
+}
+
+@MainActor
+class AppMonitor: ObservableObject {
+    static let shared = AppMonitor()
+    private init() {}
+
+    @Published var ready = false
+
+    func activate() async {
+        await MigrationManager.shared.migrate()
+        ready = true
+
+        // ...other services
+        StoreService.shared.activate()
     }
 }
 ```
@@ -835,7 +1046,7 @@ struct HelloWeatherApp: App {
 - **Persist the record, not the verdict.** Keep every field the entitlement decision needs, so other processes and a history screen answer without the store.
 - **Subscribe to both update streams.** `Transaction.updates` catches purchases; `SubscriptionInfo.Status.updates` catches renewal-state changes.
 - **An unverified transaction is noise, not a crash.** Log it and move on. A jailbroken device or corrupted data should not take the app down.
-- **Test against a StoreKit Configuration file, then a sandbox account.** Unit tests run on the file; integration tests need the sandbox.
+- **Keep the entitlement decision testable without StoreKit.** `TransactionRecord.active` is unit-tested from JSON fixtures. A StoreKit Configuration file covers purchase flows in the simulator; a sandbox account covers the rest.
 
 ---
 
@@ -846,3 +1057,5 @@ struct HelloWeatherApp: App {
 Generated by Claude using the blog-post-generator skill. Based on production code from Hello Weather's StoreKit 2 implementation handling subscriptions, lifetime purchases, and family sharing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the three processes that need the entitlement answer instead of on how complex purchases are, the prose after each code block says what to notice rather than re-walking the code, and Lessons Learned is down from eight bullets to five that the body does not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. `paidStatus` now reads `transactions.isNotEmpty` where it read `hasPaid`, a helper the source deleted two days after this post; the excerpts now define `settingsManager`, `syncService`, `hasUpdatedCurrentEntitlements`, `introEligible`, `yearlyDisplayPrice`, `planTitle`, `planTitleBase`, `isYearly`, `formattedPrice`, and `DetailRow`, which they used without defining; `handlePaidChange` wraps its side effects in a `Task`, as the source does, since the setter is not async; the persistence excerpt uses the shared ISO-8601 coders; the initialization excerpt was rewritten to the real `.task`-driven `AppMonitor` flow (the `init()` version never existed); and the watch is now described as receiving the `paid` flag over WatchConnectivity rather than reading the app group. Three changes that landed after the post date were brought current: billing grace periods in `TransactionRecord.active` (June 2026), intro-offer eligibility gating the trial copy (July 2026), and the plan card showing an error button instead of nothing when a product fails to load (July 2026). The detail view rows, alert strings, and the testing lesson were matched to the source.
