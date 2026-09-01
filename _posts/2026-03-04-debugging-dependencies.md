@@ -8,26 +8,17 @@ tags: [ruby, debugging, dependencies, patterns]
 
 ## The Problem
 
-You're using a third-party library. Something isn't working. You have two tempting options:
+Agent files were not being found, and the paths the loader built were malformed. The loader lived in a third-party gem. The tempting fix was to guess at the path manipulation and patch around it in our own code, or to monkey patch the loader.
 
-1. **Guess and patch** - Add a workaround based on what you think the library does
-2. **Monkey patch** - Override the broken behavior in your codebase
-
-Both create technical debt. The library probably works correctly - you're just using it wrong. Or the feature you need already exists under a different name. Or someone already fixed this upstream.
+Both build debt on top of a guess. A library that "isn't working" is usually being called wrong. Or the feature exists under a different name. Or someone already fixed it upstream, and the workaround would outlive the fix.
 
 ## Two Complementary Patterns
 
-### Pattern 1: Investigate Source First
-
-When something doesn't work, read the source code before guessing.
-
-### Pattern 2: Research Upstream First
-
-Before implementing a workaround, check if someone already solved your problem.
+Two habits cover the two ways a dependency disappoints. When something does not work, read the source before guessing at what it does. When something is missing, research upstream before writing a workaround.
 
 ## Pattern 1: Investigate Source
 
-Most package managers let you locate and read dependency source code. In Ruby:
+Most package managers can locate dependency source and open it in an editor. In Ruby:
 
 ```bash
 # Find where the gem is installed
@@ -57,19 +48,19 @@ bundle open problematic_gem
 # Read the code to understand actual behavior
 ```
 
-**Step 3:** Add debug statements if needed
+**Step 3:** Add debug statements if reading is not enough
 ```ruby
 # Temporary changes in gem code:
 puts "DEBUG: path = #{path.inspect}"
 binding.break  # Stop execution here
 ```
 
-**Step 4:** Run your test to observe
+**Step 4:** Run your test and watch the output
 ```bash
 bin/rails test test/models/example_test.rb
 ```
 
-**Step 5:** Restore the dependency to original state
+**Step 5:** Restore the dependency
 ```bash
 bundle pristine gem_name
 ```
@@ -81,23 +72,21 @@ bundle pristine gem_name
 - **Configuration needed** - A setting enables the behavior you want
 - **Version mismatch** - Your version doesn't have the feature yet
 
-### Critical Rule
+### Restore Before You Commit
 
-Always restore dependencies after debugging:
+Debug edits in a gem are temporary. Restore after every investigation, and never commit modified dependency source:
 ```bash
 bundle pristine gem_name  # Restore single gem
 bundle pristine           # Restore all gems
 ```
 
-Never commit modified dependency source code.
-
 ## Pattern 2: Research Before Patching
 
-Before implementing a workaround, spend 25 minutes researching. This prevents technical debt.
+When the library lacks what you need, spend 25 minutes researching before writing a workaround. A patch written first tends to outlive the upstream fix it duplicates.
 
 ### The Research Protocol
 
-**GitHub Issues (5 min)**
+**GitHub Issues (5-10 min)**
 ```bash
 gh issue list --repo owner/gem-name --state all --limit 100 | grep -i "feature"
 gh pr list --repo owner/gem-name --state all --limit 100 | grep -i "feature"
@@ -132,47 +121,56 @@ Look for:
 
 **Decision (5 min)**
 
-Choose the best approach based on what you found.
-
-### Decision Priority
+Choose based on what you found, in this order:
 
 1. **Use existing** - Feature exists, you missed it
-2. **Wait for PR** - Open PR implements it, looks likely to merge
-3. **Contribute upstream** - Feature missing, maintainer active
+2. **Contribute upstream** - Feature missing, maintainer active
+3. **Wait for PR** - Open PR implements it, looks likely to merge; test it from a Gemfile branch
 4. **Temporary workaround** - Last resort only
 
 ### If You Must Workaround
 
-Sometimes workarounds are unavoidable. When you implement one:
+Some workarounds are unavoidable. When you write one:
 
-- **Isolate it** - Single file, clearly marked
-- **Add a kill switch** - Environment variable to disable
-- **Test for removal** - Version check that fails when you upgrade
+- **Isolate it** - Single initializer, clearly marked
+- **Test for removal** - Version check test that fails when you upgrade
 - **Link to upstream** - Comment with issue/PR URL
 - **Plan removal** - Document when/how to remove it
 
 ```ruby
-# config/initializers/gem_workaround.rb
-#
-# WORKAROUND: Fixes X behavior in gem_name < 2.0
-# See: https://github.com/owner/gem_name/issues/123
-# Remove when: gem_name >= 2.0 (PR #456 merged)
-#
-# Toggle: DISABLE_GEM_WORKAROUND=1 to disable
+# config/initializers/gem_name_fixes.rb
+# Temporary fix for gem_name bug
+# Upstream PR: https://github.com/author/gem-name/pull/123
+# Remove when gem-name >= vX.Y.Z
+Rails.application.config.to_prepare do
+  require "gem_name"
 
-return if ENV["DISABLE_GEM_WORKAROUND"]
-return if Gem::Version.new(GemName::VERSION) >= Gem::Version.new("2.0")
-
-# ... minimal patch code ...
+  module GemName
+    class BuggyClass
+      def buggy_method
+        # Fixed implementation
+      end
+    end
+  end
+end
 ```
+
+```ruby
+# test/models/some_test.rb
+test "gem_name version check for monkey patch" do
+  current_version = Gem.loaded_specs["gem_name"]&.version&.to_s
+
+  assert_equal "1.2.3", current_version,
+    "gem_name version changed to #{current_version}. " \
+    "Check if monkey patch still needed (PR #123)."
+end
+```
+
+The test is the removal plan. It passes today and fails on the first gem upgrade, so the patch cannot be forgotten and cannot silently override the upstream fix.
 
 ## Real Example: Path Resolution Bug
 
-**Problem:** Agent files not found, paths malformed.
-
-**Wrong approach:** Guess at path manipulation, add workarounds.
-
-**Right approach:**
+This is the bug from the opening. Reading the source instead of guessing at path manipulation took six steps:
 
 ```bash
 # 1. Locate gem
@@ -182,38 +180,36 @@ bundle show swarm_sdk
 # 2. Open and search
 bundle open swarm_sdk
 # Search for file loading logic
-# Found: paths resolved relative to config file directory
+# Found: SwarmSDK::Swarm.load
+# Found: agent_file paths resolved relative to the config file's directory
 
-# 3. Add debug output
+# 3. Add debug output in the gem
 # puts "Loading agent from: #{resolved_path}"
 
 # 4. Run test
 bin/rails test test/models/workflow_test.rb
-# Output reveals: Loading from wrong directory
+# Loading agent from: app/agents/workflows/app/agents/math/coordinator.md (WRONG)
 
-# 5. Fix: Use correct relative path in config
+# 5. Fix: agent_file "../math/coordinator.md", not "app/agents/math/coordinator.md"
 
 # 6. Restore gem
 bundle pristine swarm_sdk
 ```
 
-**Result:** Fixed in 10 minutes by reading source. No workaround needed.
+The gem resolved `agent_file` paths relative to the config file's directory, so a project-relative path got the config directory prepended. The fix was a corrected relative path in our config. No workaround needed.
 
 ## Results
 
-With these patterns:
-- Fewer workarounds and monkey patches
-- Better understanding of dependencies
-- Contributions to upstream projects
-- Less technical debt to maintain
+- The path bug was a usage error, fixed with a config change and no patch.
+- The cost is a 25-minute time box before any workaround, and `bundle pristine` after every investigation.
+- Fewer workarounds and monkey patches to maintain, and fixes that go upstream instead of staying local.
 
 ## Lessons Learned
 
-- **Read source first** - Most "bugs" are usage errors
-- **25 minutes saves hours** - Research prevents bad workarounds
-- **Contribute over patch** - Upstream fixes benefit everyone
-- **Restore always** - `bundle pristine` after every investigation
-- **Document workarounds** - Future you will thank present you
+- **Most "bugs" are usage errors.** Read the library's source before assuming it is broken; the fix is usually on your side of the call.
+- **25 minutes of research is cheaper than any workaround.** Issues, releases, then source, then decide.
+- **Contribute over patch.** An upstream fix helps everyone and never needs removing.
+- **Give every workaround an exit.** A version check test that fails on the next upgrade beats a comment asking someone to remember.
 
 ---
 
@@ -222,3 +218,7 @@ With these patterns:
 **Prompt:** "let's write (one or more) posts about the skills we have in helloweather web and ios... in web we have debugging and dependency research, which I think might be a good one to share."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Combines the debugging and dependency-research skills from helloweather/web into a unified workflow.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the path-resolution bug instead of the reader's situation, the pattern overview no longer restates the section headings, the workaround code gets a note on the version guard, and Results and Lessons Learned hold only what the body does not already say. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The workaround excerpt was replaced with the skill's actual pattern, a `to_prepare` monkey patch in an initializer plus a version check test that fails on upgrade, since the skill never used a runtime `ENV`/`Gem::Version` guard; the "kill switch" bullet went with it. The decision order now matches the current skill (contribute upstream before waiting on a PR). The real example gained the actual finding (`SwarmSDK::Swarm.load`, the doubled `app/agents/workflows/app/agents/...` path, and the `../math/coordinator.md` fix) from the skill it came from, and the unsourced "10 minutes" claim was dropped. That swarm_sdk bug happened in a sibling Rails project whose skills were ported into helloweather/web in November 2025; web itself never depended on swarm_sdk, and on 2026-07-16 it deleted the debugging skill and folded dependency-research into its open-source-contributions skill, which is where the current rule wording lives.

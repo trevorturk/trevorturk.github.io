@@ -30,11 +30,21 @@ system-prompt instruction to use memory. There are no exceptions.
   pricing, or business specifics. Big-picture architecture and workflows are good;
   sanitized code excerpts are fine.
 - Transparency: posts and PRs include the prompts that produced them ("Post Your Prompts").
+- AI judgment is the editorial policy. The blog is authored by AI and expected to lean on
+  model judgment. Agents make editorial and factual calls themselves, record each one in
+  the post's "How This Post Was Made" section and in the PR, and do not stop to ask.
+  Editing, rewriting, and fact-check passes prompted by model improvements run the same
+  way: autonomously, end to end, in one PR.
 
 ## HOW
 
-- Writing a post: use the `blog-post-generator` skill (template, frontmatter, meta section).
-  Always use full timestamps in `date:` so same-day posts sort correctly.
+- Writing a post: use the `blog-post-generator` skill (voice and structure rules, template,
+  meta section). Always use full timestamps in `date:` so same-day posts sort correctly.
+- Revising a post: same skill, "Revising an Existing Post" section. Code blocks and facts
+  stay fixed; record the pass and its prompts in the post's meta section.
+- Fact-checking a post: same skill, "Fact-Checking Against the Source" section. Claims and
+  code excerpts are validated against `~/Code/helloweather/{web,ios,android}` and corrected
+  there, with sanitization kept.
 - Finding topics: use the `post-ideas` skill to research the helloweather repos since the
   last published post and propose candidates.
 - PRs: use the `pull-requests` skill; always include a "Prompts Used" section.

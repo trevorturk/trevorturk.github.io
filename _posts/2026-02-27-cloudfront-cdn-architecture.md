@@ -10,18 +10,13 @@ tags: [cloudfront, aws, caching, architecture]
 
 ## The Problem
 
-[Hello Weather](https://helloweather.com) aggregates data from multiple upstream weather providers. Each provider has rate limits, latency variations, and occasional outages. Calling them directly from our app means:
+Most weather providers charge per request, and thousands of [Hello Weather](https://helloweather.com) users ask about the same places at the same times. Calling the providers directly meant paying for every one of those requests, and cost was not the only problem. Each provider has its own rate limits, so a busy hour risked tripping them. Each response took as long as the upstream took, so latency varied from request to request. When a provider went down, the app felt it immediately.
 
-- **Rate limit risk** - Thousands of users hitting the same endpoints
-- **Latency variance** - Each request depends on upstream response time
-- **Cascading failures** - If a provider goes down, our app feels it immediately
-- **Cost** - Most providers charge per request
-
-We needed a caching layer that could handle our scale without complex infrastructure.
+We needed a caching layer that could absorb that load without complex infrastructure.
 
 ## The Solution
 
-CloudFront as an "infinite cache" sitting between our app and each upstream provider. Each data source gets its own CloudFront distribution. Our app hits CloudFront, CloudFront hits the origin only when needed.
+Put CloudFront between the app and each provider as an "infinite cache." Every data source gets its own distribution. The app calls CloudFront, and CloudFront calls the origin only on a miss.
 
 ### Architecture
 
@@ -37,38 +32,58 @@ Client Request
                             └─> Return to client
 ```
 
-**Each source has its own distribution:**
+Each source's distribution and origin live in one config file, and a `CDN_ENABLED` flag picks which host the adapter calls (hosts are illustrative):
 
-```bash
-# Environment variables
-ACCUWEATHER_CDN_HOST=d123abc.cloudfront.net
-AERIS_CDN_HOST=d456def.cloudfront.net
-PIRATEWEATHER_CDN_HOST=d789ghi.cloudfront.net
+```yaml
+# config/cloudfront.yml
+sources:
+  accuweather:
+    distribution_id: E1EXAMPLE
+    cdn_host: https://d123abc.cloudfront.net
+    origin_host: https://api.accuweather.example
+  aeris_weather:
+    distribution_id: E2EXAMPLE
+    cdn_host: https://d456def.cloudfront.net
+    origin_host: https://api.aeris.example
 ```
 
-This isolation means issues with one source don't affect others.
+```ruby
+class Api::Host
+  CONFIG = YAML.load_file(Rails.root.join("config/cloudfront.yml")).freeze
+
+  def self.host_for(key)
+    CONFIG.dig("sources", key, cdn_enabled? ? "cdn_host" : "origin_host")
+  end
+
+  def self.cdn_enabled?
+    ENV["CDN_ENABLED"] == "true"
+  end
+end
+```
+
+Development leaves `CDN_ENABLED` unset and talks to origins directly. A problem at one origin stays inside one distribution and never touches the others.
 
 ## Implementation
 
 ### The Cache Key Problem
 
-Standard CDN caching uses URL + headers as the cache key. But weather requests have a problem: we want multiple requests for "weather at lat/lon" to hit the same cache entry, even if made at different times.
-
-Naive approach:
+A CDN keys its cache on the URL plus the headers you tell it to vary on. The providers' own `Cache-Control` headers are no help: many sources send none, and the rest set TTLs too short to be worth caching. So we send our own expiry header and put it in the cache key. The obvious first version is wrong:
 
 ```ruby
 # Different every request = always cache miss
-headers["Cache-Control"] = "max-age=900"  # 15 minutes
+headers["Cache-Expires"] = 1.hour.from_now.to_s
 ```
 
-The problem is each request generates a different expiration time, creating different cache keys.
+Each request computes its own expiration from the moment it is made, so no two requests share a key and nothing is ever a hit.
 
 ### The Cache-Expires Solution
 
-Instead of "how long to cache," we send "when does this expire" - a fixed boundary time:
+Instead of "how long to cache," send "when this expires," as a fixed boundary time:
 
 ```ruby
-def cdn_headers_for(cache_level)
+CDN_USER_AGENT = "weathermachine.io"
+
+def cdn_headers_for(cache_level, url = nil)
   cache_expires = case cache_level
   when :currently, :alerts
     Time.now.utc.beginning_of_hour + cdn_15_minutes + 1.second
@@ -78,15 +93,24 @@ def cdn_headers_for(cache_level)
     Time.now.utc.beginning_of_hour + 1.hour + 1.second
   when :daily
     Time.now.utc.beginning_of_day + cdn_3_hours + 1.second
+  when :astronomy, :pollen
+    Time.now.utc.beginning_of_day + 1.day + 1.second  # next UTC date boundary
   when :weekly
-    "v1"  # Static versioned cache
+    "v1"  # CDN min/max/default TTL is 1.week, but we send a version number
+  else
+    raise Api::Weather::NotImplementedError, cache_level
   end
 
-  { "Cache-Expires" => cache_expires.to_s }
+  {
+    "Cache-Env" => ENV.fetch("CDN_ENV", Rails.env),
+    "Cache-Expires" => cache_expires.to_s,
+    "Cache-Id" => account&.uuid,
+    "User-Agent" => CDN_USER_AGENT,
+  }.compact
 end
 ```
 
-Now requests at different times produce the same header:
+Every time-based branch rounds down to a boundary and then adds one second past it, so a request made exactly on the boundary keys to the next window rather than the one that just closed. `:weekly` sends a version string instead of a time; CloudFront's TTL on every distribution is one week, so `v1` rides that TTL and only a bumped version evicts it. `:astronomy` and `:pollen` landed in June 2026, after this post was first published, for data that changes once per calendar date. Requests made at different times inside the same window now produce the same header:
 
 ```ruby
 # Request at 01:05 UTC → Cache-Expires: 02:00 UTC (miss)
@@ -106,11 +130,14 @@ Different data types need different freshness:
 | `:hourly` | 1 hour | ~1 hour | Hourly forecast |
 | `:daily` | 3 hours | ~3 hours | Daily forecast |
 | `:alerts` | 15 min | ~15 min | Weather alerts |
-| `:weekly` | version | 1 week | Moon phases, static |
+| `:astronomy` / `:pollen` | next UTC date | ~24 hours | Sun/moon, pollen |
+| `:weekly` | version | 1 week | URL-stable only: location keys, geocoding |
+
+Sun/moon data ran on `:daily` until June 2026 and now has its own level. It never belonged on `:weekly`: the static `v1` key would serve the same phases all week. Anything keyed to a calendar date needs a level that rolls at the date boundary.
 
 ### 15-Minute Buckets
 
-For current conditions, we bucket into 15-minute windows:
+Current conditions bucket into 15-minute windows:
 
 ```ruby
 def cdn_15_minutes
@@ -125,7 +152,7 @@ end
 
 ### The get() Helper
 
-Source adapters use a simple interface:
+Source adapters name the cache level and the URL, and nothing else:
 
 ```ruby
 def currently_data
@@ -134,11 +161,11 @@ def currently_data
 end
 ```
 
-Under the hood, `get()` adds the cache headers and tracks hits:
+Under the hood, `get()` adds the cache headers and counts hits and misses:
 
 ```ruby
 def get(cache_level, url, headers = {})
-  headers.merge!(cdn_headers_for(cache_level)) if cdn_enabled?
+  headers.merge!(cdn_headers_for(cache_level, url)) if cdn_enabled?
 
   Api::AsyncHttp.get(url, headers, timeout: timeout).wait.tap do |response|
     case response.cdn
@@ -151,36 +178,45 @@ end
 
 ### Api::AsyncHttp
 
-The HTTP client validates CDN usage:
+The HTTP client refuses any CloudFront request that would key the cache wrong:
 
 ```ruby
 class Api::AsyncHttp
+  CDN_NAME = "cloudfront"
+  CDN_HEADER_NAME = "Cache-Expires"
   CDN_HEADERS_ALLOWED = [
-    "Cache-Env", "Cache-Expires", "Cache-Id", "User-Agent"
+    "Accept",
+    "Authorization",
+    "Cache-Env",
+    "Cache-Expires",
+    "Cache-Id",
+    "User-Agent",
   ]
 
-  def self.get(url, headers, timeout:)
+  def self.get(url, headers = nil, timeout: nil)
     validate_cdn_headers_if_cdn_host!(url, headers)
     # ... make request
   end
 
+  # Since the CDN has a long default expiration, be careful when calling
+  # Async::HTTP directly, making sure we don't hit CloudFront without the
+  # Cache-Expires header, and if we're sending new headers, make sure to
+  # include those in the CloudFront config.
   def self.validate_cdn_headers_if_cdn_host!(url, headers)
-    return unless url.include?("cloudfront")
+    return unless url.include?(CDN_NAME)
 
-    # Must have Cache-Expires
-    unless headers.key?("Cache-Expires")
-      raise ArgumentError, "can't hit CloudFront without cache busting header"
+    if headers.keys.exclude?(CDN_HEADER_NAME)
+      raise ArgumentError, "can't hit CloudFront without the cache busting header"
     end
 
-    # Only allowed headers
-    if headers.keys.any? { |h| CDN_HEADERS_ALLOWED.exclude?(h) }
-      raise ArgumentError, "can't hit CloudFront with unapproved headers"
+    if headers.keys.any? { |header| CDN_HEADERS_ALLOWED.exclude?(header) }
+      raise ArgumentError, "can't hit CloudFront with headers that aren't in the CloudFront config"
     end
   end
 end
 ```
 
-This prevents accidental cache pollution from new headers.
+CloudFront forwards only the headers its config names and drops the rest before the origin sees them. A new header added elsewhere would either vanish silently or, once added to the config, fragment the cache key. The allowlist mirrors the config, so a header that is not in both raises at the call site. `Accept` and `Authorization` are there because a couple of origins need them on the request.
 
 ### Additional Cache Key Headers
 
@@ -194,7 +230,7 @@ Beyond `Cache-Expires`, we include:
 
 ## Debugging Cache Behavior
 
-CloudFront tells you what happened:
+CloudFront reports what happened on every response:
 
 ```bash
 curl -I "https://d123abc.cloudfront.net/endpoint?lat=41.87&lon=-87.62"
@@ -216,22 +252,20 @@ Age: 123                       # Seconds since cached
 
 ## Related: Timeout Tuning
 
-This CDN architecture creates the need for per-source timeout tuning, which we cover in [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/). Each source has different latency characteristics, and CloudFront logs help us tune timeouts appropriately.
+Each source has its own latency profile, so this architecture creates a need for per-source timeout tuning. [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/) covers how CloudFront logs drive those timeouts.
 
 ## Results
 
-- **Cache hit rates 60-80%** for frequently accessed locations
-- **Upstream costs reduced** - Fewer origin requests
-- **Reliability improved** - CloudFront shields us from brief outages
-- **Latency reduced** - Edge locations serve cached responses faster
+- Cache hit rates of 60-80% for frequently accessed locations, as of February 2026.
+- Fewer origin requests, so lower upstream costs.
+- CloudFront shields the app from brief provider outages, and edge locations serve cached responses faster than the origin would.
 
 ## Lessons Learned
 
-- **Boundary times, not durations** - The key insight that makes caching work
-- **Per-source distributions** - Isolation prevents cross-contamination
-- **Validate CDN headers** - Runtime checks prevent cache pollution
-- **Track cache hits** - Visibility into savings and behavior
-- **Different data, different TTLs** - One cache policy doesn't fit all
+- **One distribution per origin.** Isolation is cheaper than debugging one source's bad responses showing up in another's cache.
+- **Reject unapproved cache headers at the client.** A stray header is silently dropped or silently fragments the key; an exception is a bug you find in development.
+- **Count hits and misses at the call site.** Without a tracker, the savings are invisible and so are regressions.
+- **Set the TTL per data type.** The freshness the UI needs decides the boundary, and one policy cannot serve a nowcast and a moon phase.
 
 ---
 
@@ -240,3 +274,7 @@ This CDN architecture creates the need for per-source timeout tuning, which we c
 **Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Architecture credit: [@nickyleach](https://github.com/nickyleach). Sources: `app/models/api/async_http.rb`, `.claude/skills/cdn-caching/SKILL.md`
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The Problem now opens on per-request pricing and shared locations as prose instead of a bullet list, each code sample is followed by what to notice rather than a restatement, and Lessons Learned drops the bullet that repeated the Cache-Expires section in favor of four rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The "naive" example now shows the real mistake, `1.hour.from_now` in `Cache-Expires`, instead of a constant `max-age=900` that contradicted its own comment; the per-source `*_CDN_HOST` env vars, which this codebase never used, are replaced by the `config/cloudfront.yml` plus `Api::Host` lookup that landed in March 2026; `cdn_headers_for` now matches the source, including the full header hash, the `else raise`, and the `:astronomy`/`:pollen` level added in June 2026, with the cache-levels table corrected, since it listed moon phases under `:weekly` while the adapters actually fetched sun/moon at `:daily`; the `Api::AsyncHttp` allowlist gains `Accept` and `Authorization`, which have been in it since 2022, and its error messages use the real wording; the prose about stray headers now says CloudFront drops headers its config does not name rather than silently changing the key; and the 60-80% hit rate is dated to February 2026 because no source records it.

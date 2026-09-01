@@ -8,42 +8,38 @@ tags: [ai-agents, claude-code, workflow, communication]
 
 ## The Problem
 
-As coding agents get stronger, they delegate more. A single session on the [Hello Weather](https://helloweather.com) iOS repo will routinely dispatch an adversarial review round to a second frontier model, fan out subagents per surface, and drain a findings queue - all before the human sees a word.
+One item in our iOS code-review checklist carries a rule. After the adversarial review round settles, *"digest to the user as an ELI5 with a recommendation."* Not a findings dump: a plain-language explanation a smart person with zero context can follow, ending with what the agent thinks you should do. That digest turned out to be the most valuable artifact of the whole round. The findings were the work. The ELI5 was the interface.
 
-The raw output of that work is expert-dense by nature: findings lists keyed by internal shorthand, invariant names invented three subagents ago, verdicts that assume you watched the whole process unfold. The human maintainer - the one person who has to actually decide - becomes the bottleneck, rereading output that was technically complete but practically unreadable.
+Then we moved our [Hello Weather](https://helloweather.com) sessions to a new, more capable model tier, and it delegates more aggressively than the last one. A single session on the iOS repo will dispatch an adversarial review round to a second frontier model, fan out subagents per surface, and drain a findings queue before the human sees a word. The raw output is expert-dense: findings lists keyed by internal shorthand, invariant names invented three subagents ago, verdicts that assume you watched the whole process unfold. The one person who has to decide becomes the bottleneck, rereading output that was technically complete and practically unreadable.
 
-We had already solved this in one narrow place. Our iOS code-review checklist ends with a rule: after the adversarial review round settles, *"digest to the user as an ELI5 with a recommendation."* Not a findings dump - a plain-language explanation a smart person with zero context can follow, ending with what the agent thinks you should do.
-
-That digest turned out to be the most valuable artifact of the entire round. The findings were the work; the ELI5 was the interface.
-
-So when we moved our sessions to a new, more capable model tier - which delegates even more aggressively - the question was obvious: why is ELI5 a special-case rule for one checklist step, instead of the default contract for everything the agent says?
+So why was ELI5 a special-case rule for one checklist step, instead of the default contract for everything the agent says?
 
 ## The Solution
 
-Claude Code has a mechanism built for exactly this: **output styles**. An output style is a Markdown file that modifies the agent's system prompt - it changes how the agent *communicates* without touching what it *does*. Critically for a team, styles can be checked into the repo and activated by a checked-in setting, so every contributor (and every model) gets the same contract.
+Claude Code has a mechanism built for this: output styles. An output style is a Markdown file that modifies the agent's system prompt. It changes how the agent *communicates* without touching what it *does*. Styles can be checked into the repo and activated by a checked-in setting, so every contributor and every model gets the same contract.
 
-The division of labor that makes this clean:
+The division of labor:
 
 - **`AGENTS.md` / `CLAUDE.md`** - project context, conventions, invariants: what the agent should *know and do*
 - **Output style** - tone, structure, explanation level: how the agent should *talk to you*
 
-We added the same two files to all three Hello Weather repos (iOS, Android, and the Rails backend).
+The same two files went into all three Hello Weather repos (iOS, Android, and the Rails backend).
 
 ## Implementation
 
 ### The style file
 
-`.claude/output-styles/ELI5.md` (the filename deliberately matches the style's `name:` - more on that below):
+`.claude/output-styles/ELI5.md`. The filename deliberately matches the style's `name:`, for a reason covered below:
 
 ```markdown
 ---
 name: ELI5
-description: Plain-language digests - bottom line first, jargon defined, recommendation included
+description: Plain-language digests — bottom line first, jargon defined, recommendation included
 keep-coding-instructions: true
 ---
 
 Write every response to the user as an ELI5 digest: plain language a smart reader
-with zero context can follow in one pass. Simplify the explanation, never the work -
+with zero context can follow in one pass. Simplify the explanation, never the work —
 code, tests, and technical decisions stay precise and idiomatic.
 
 - Lead with the bottom line in one plain sentence: what happened, what you found,
@@ -55,19 +51,15 @@ code, tests, and technical decisions stay precise and idiomatic.
   what they are on first mention; precise symbol and file names stay exact.
 - When reporting delegated or reviewed work (agent rounds, adversarial reviews),
   digest it the same way: what was checked, what was found, and a clear
-  recommendation - not a raw findings dump.
+  recommendation — not a raw findings dump.
 - End with a clear recommendation whenever a decision is needed.
 ```
 
-Two details matter here:
-
-**`keep-coding-instructions: true`** keeps the harness's software-engineering instructions intact. The style only layers communication rules on top. Without it you'd be trading code quality for readability, which is the wrong trade.
-
-**"Simplify the explanation, never the work"** is the load-bearing line. ELI5 is an output contract, not a capability downgrade. The code, the tests, and the review rigor are unchanged - only the final rendering to the human changes.
+Two lines in that file do most of the work. `keep-coding-instructions: true` keeps the harness's software-engineering instructions intact, so the style only layers communication rules on top. Without it you would be trading code quality for readability, which is the wrong trade. "Simplify the explanation, never the work" makes the same promise in the body: ELI5 is an output contract, not a capability downgrade. The code, the tests, and the review rigor are unchanged. Only the final rendering to the human changes.
 
 ### Activating it
 
-One key in the checked-in `.claude/settings.json` (the value matches the style's `name:` field, case-sensitively):
+One key in the checked-in `.claude/settings.json`. The value matches the style's `name:` field, case-sensitively:
 
 ```json
 {
@@ -77,45 +69,43 @@ One key in the checked-in `.claude/settings.json` (the value matches the style's
 }
 ```
 
-Because both files are committed, the default travels with the repo: every clone, every teammate, every session. Individuals can still override locally in `settings.local.json`, and the style applies regardless of which model is selected - which is the point, since the reason we did this was a model change.
+Because both files are committed, the default travels with the repo: every clone, every teammate, every session. Individuals can still override locally in `settings.local.json`. The style applies regardless of which model is selected, which matters here because a model change is what prompted it.
 
-(One version note: the old `/output-style` slash command was removed in Claude Code v2.1.91. Styles themselves are alive and well - manage them via `/config` or the settings files directly.)
+One version note: the old `/output-style` slash command was deprecated in Claude Code v2.1.73 (March 2026) and is gone from current builds. Styles themselves are alive and well. Manage them via `/config` or the settings files directly.
 
 ### Documenting the decision
 
-A settings key with no rationale is a future mystery, so each repo's `AGENTS.md` gets a short dated section: what the setting is, where the style lives, why it exists ("the same ELI5-with-recommendation shape the adversarial review rounds digest to"), and an explicit exit condition - *drop the setting if it stops earning its keep*. A default you can't cheaply reverse is a policy; this is meant to be an experiment with a paper trail.
+A settings key with no rationale is a future mystery, so each repo's `AGENTS.md` gets a short dated section: what the setting is, where the style lives, why it exists ("the same ELI5-with-recommendation shape the adversarial review rounds digest to"), and an explicit exit condition, *drop it if it stops earning its keep*. A default you cannot cheaply reverse is a policy. This one is meant to be an experiment with a paper trail. (On 2026-08-13 the repos went tool-agnostic and split the note: `CLAUDE.md` now holds the setting and file path, and `AGENTS.md` states the contract as prose any tool can follow.)
 
 ### Attack your own config before trusting it
 
-Before calling it done, we dispatched one more round: three parallel agents - one verifying the official docs and full changelog history, one sweeping community field reports (GitHub issues, HN, practitioner blogs), and one adversarial reviewer instructed to refute the shipped files, which went as far as reading the style loader in the shipped Claude Code binary. The mechanism held - output styles are actively maintained, and their one deprecation (November 2025) was reversed within days on community feedback. But the round produced four one-line hardenings, all folded into the version shown above:
+Before calling it done, we dispatched one more round of three parallel agents. One verified the official docs and full changelog history. One swept community field reports (GitHub issues, HN, practitioner blogs). One adversarial reviewer was instructed to refute the shipped files, and went as far as reading the style loader in the shipped Claude Code binary. The mechanism held: output styles are actively maintained, and their one deprecation (v2.0.30, late October 2025) was reversed within days on community feedback. But the round produced four one-line hardenings, all folded into the version shown above:
 
-- **The filename matches the style's `name:` case-sensitively** (`ELI5.md`, not `eli5.md`). An open issue ([anthropics/claude-code#47482](https://github.com/anthropics/claude-code/issues/47482)) reports styles that show as active in the statusline while their body is silently never injected, with a name/filename case mismatch isolated as the trigger. Our binary read suggested current versions resolve it correctly anyway - matching them is free insurance either way.
-- **The unconditional "end with a recap" rule is gone.** Claude Code ships an always-on anti-verbosity section in its system prompt; a style instruction that fights it every turn is the documented adherence-killer. The recommendation is now gated on "whenever a decision is needed."
-- **Codenames get glossed on first mention only, and exact symbol names are explicitly preserved.** The original wording demanded re-explaining every internal name forever - padding that pressures the model toward vague paraphrase when the precise symbol is the point.
-- **"Every user-facing response" became "every response to the user."** In our repos "user-facing" is a term of art for shipped product copy, which has its own stricter voice rules; the style must never read as license to rewrite that.
+- **The filename matches the style's `name:` case-sensitively** (`ELI5.md`, not `eli5.md`). An open issue ([anthropics/claude-code#47482](https://github.com/anthropics/claude-code/issues/47482)) reports styles that show as active in the statusline while their body is silently never injected, with a name/filename case mismatch isolated as the trigger. Our binary read suggested current versions resolve it correctly anyway, and matching them is free insurance.
+- **The unconditional "end with a recap" rule is gone.** Claude Code ships an always-on anti-verbosity section in its system prompt, and a style instruction that fights it every turn is the documented adherence-killer. The recommendation is now gated on "whenever a decision is needed."
+- **Codenames get glossed on first mention only, and exact symbol names are explicitly preserved.** The original wording demanded re-explaining every internal name forever, padding that pressures the model toward vague paraphrase when the precise symbol is the point.
+- **"Every user-facing response" became "every response to the user."** In our repos "user-facing" is a term of art for shipped product copy, which has its own stricter voice rules. The style must never read as license to rewrite that.
 
-The round also set two expectations we chose to accept rather than fix. Custom styles currently get no per-turn adherence reminder - the binary only reinforces built-in styles, despite docs saying otherwise - so expect some drift back toward default terseness late in long sessions, and judge the experiment on early-session behavior. And a committed `outputStyle` also applies to headless runs in the repo, with no per-run opt-out yet ([#81334](https://github.com/anthropics/claude-code/issues/81334)).
+The round also set two expectations we chose to accept rather than fix. Custom styles got no per-turn adherence reminder at the time. The binary only reinforced built-in styles, despite docs saying otherwise, so we expected some drift back toward default terseness late in long sessions, and judged the experiment on early-session behavior. Claude Code v2.1.238 (2026-08-20) fixed custom styles drifting back to the default voice mid-session. And a committed `outputStyle` also applies to headless runs in the repo. The request for a per-run opt-out ([#81334](https://github.com/anthropics/claude-code/issues/81334)) was closed on 2026-08-17 as already possible: `claude -p --settings '{"outputStyle":"default"}'` overrides the committed key for one run.
 
-One sentiment note worth passing on: teams building custom styles in 2026 overwhelmingly build them to make the agent *terser*. An expansive plain-language default swims against that current - and against the server's own conciseness instructions - which is exactly why the style needs to avoid picking fights it can't win.
+One sentiment note: teams building custom styles in 2026 overwhelmingly build them to make the agent *terser*. A plain-language default swims against that current and against the server's own conciseness instructions, so it cannot afford fights it will lose.
 
 ## Results
 
-The narrow-case rule became the general contract with nine small file changes across three repos: one style file, one settings key, and one documentation note each.
+The narrow-case rule became the general contract with nine small file changes across three repos: one style file, one settings key, and one documentation note each. Nothing is measured yet. What we expect, based on the review-round experience:
 
-What we expect from it, based on the review-round experience:
+- **Decisions speed up.** Bottom line first means the human reads one sentence before deciding whether to read ten.
+- **Delegated work stays legible.** The more a session fans out, the more the final digest matters, and the style makes it mandatory rather than checklist-dependent.
+- **The contract survives model churn.** Styles bind to the repo, not the model.
 
-- **Decisions speed up.** The bottom-line-first rule means the human reads one sentence before deciding whether to read ten.
-- **Delegated work stays legible.** The more a session fans out, the more the final digest matters - the style makes the digest mandatory rather than checklist-dependent.
-- **The contract survives model churn.** Styles bind to the repo, not the model. Whatever tier runs next quarter inherits the same interface.
+The accepted cost was the two limits above: some drift back toward terseness late in long sessions, and no headless opt-out. Both have since been lifted, as noted there.
 
 ## Lessons Learned
 
-- **Watch what you actually read.** The findings lists were skimmed; the ELI5 digests were read. The artifact you consistently reach for is telling you what the default output should be.
-- **Put communication contracts in the repo, not in memory.** A style file and a settings key are versioned, reviewable, shared across the team, and portable across tools. An agent's private memory is none of those things.
-- **Separate the work from the rendering.** `keep-coding-instructions: true` plus "never simplify the work" keeps the contract honest - you're changing the interface, not the engineering.
-- **Date the decision and name the exit.** "Adopted 2026-08-07; drop it if it stops earning its keep" turns a default into a reversible experiment.
-- **Attack your own config with an adversarial round.** Three agents (official docs, community sentiment, refute-the-change) took minutes and produced four one-line hardenings plus one documented-but-false assumption we'd otherwise have relied on: the docs say all styles get per-turn adherence reminders; the binary says only built-ins do.
-- **Don't write instructions that fight the system prompt.** An unconditional "always recap" mandate loses to the built-in anti-verbosity instructions eventually; a conditional one doesn't have to win an argument every turn.
+- **Watch what you actually read.** The findings lists were skimmed. The ELI5 digests were read. The artifact you consistently reach for is telling you what the default output should be.
+- **Put communication contracts in the repo, not in memory.** A style file and a settings key are versioned, reviewable, and portable across tools. An agent's private memory is none of those.
+- **Don't write instructions that fight the system prompt.** An unconditional "always recap" mandate loses to the built-in anti-verbosity instructions eventually. A conditional one never has to win the argument.
+- **Check the docs against the binary.** The docs said every style gets per-turn adherence reminders. The style loader said only built-ins do. Minutes of adversarial review caught an assumption we would otherwise have relied on, and the gap was real until v2.1.238 closed it.
 
 ---
 
@@ -130,3 +120,7 @@ What we expect from it, based on the review-round experience:
 **Prompt 4:** "agreed with your recommendation, but also update the blog post pr (we're working on 4 prs in this session)"
 
 Generated by Claude using the blog-post-generator skill, in the same session that made the config changes it describes. The mechanism was verified against the current Claude Code docs before writing; the "Attack your own config" section documents the three-agent research round that then hardened both the config and this post.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the checklist rule and the model change that prompted the work, Results states expectations as expectations plus the accepted cost, and Lessons Learned dropped the two bullets that repeated body sections. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The style file, settings key, nine-file count, and checklist quote match the repos; the style excerpt now carries the file's em dashes, the checklist rule is described as one item rather than the last one, and the exit-condition quote uses the current wording plus a note that the AGENTS.md section split into CLAUDE.md and AGENTS.md on 2026-08-13. The `/output-style` version note now cites the changelog's v2.1.73 deprecation, the styles deprecation is dated to v2.0.30 in late October 2025, and the two accepted limits are marked as since lifted: the drift fix landed in v2.1.238 and issue #81334 closed pointing to `--settings`.

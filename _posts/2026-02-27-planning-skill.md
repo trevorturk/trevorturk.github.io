@@ -8,20 +8,18 @@ tags: [skills, planning, workflow, claude]
 
 ## The Problem
 
-Project management tools are designed for teams and timelines. But sometimes you just need to plan something, implement it, and move on. Todo lists get stale. Kanban boards accumulate cruft. Tickets sit in "Done" forever.
+Work that spans more than one session needs its context written down somewhere. A todo list holds the "what" but not the "why" or the "how," and it goes stale. An issue tracker is built for multiple people over extended time, and its tickets sit in "Done" forever. Neither fits one person (or one person plus Claude) working on one thing until it is done. We wanted to write down what we're going to do, track progress, then clean up when finished. No ceremonies, no backlog grooming, no status updates.
 
-We wanted something simpler: a way to write down what we're going to do, track progress, then clean up when we're finished. No ceremonies, no backlog grooming, no status updates.
-
-(Ironic note: this comes from people who used to work at Basecamp, makers of project management software. Sometimes the best tool is a markdown file.)
+This comes from people who used to work at Basecamp, makers of project management software. Sometimes the best tool is a markdown file.
 
 ## The Solution
 
-A planning skill that treats plans as **living documents** in a `plans/` directory. Create them, implement them, then remove them. The index file (`plans/index.md`) serves as navigation.
+A planning skill that treats plans as **living documents** in a `plans/` directory. Create them, implement them, then remove them. An index file is the navigation: `plans/index.md` when this was written, a root `PLANS.md` since July 2026.
 
 ### Philosophy
 
 Plans are NOT for:
-- Historical documentation (use CLAUDE.md or skills)
+- Historical documentation (use AGENTS.md or skills)
 - Permanent reference (extract lessons first, then delete)
 - Status reporting (no one reads those anyway)
 
@@ -36,7 +34,7 @@ Plans ARE for:
 Create → Implement → Remove → (Preserve critical rationale elsewhere)
 ```
 
-When a plan is fully implemented, it gets deleted. If there are important lessons or patterns, extract them to CLAUDE.md or create a skill before deleting.
+A fully implemented plan gets deleted. Any lesson or pattern worth keeping goes to a skill, README, or AGENTS.md first. The skill now spells out the only three reasons to keep a plan: unstarted future work, dormant work with a live reopen trigger, or an active decision with pending actions. A plan that calls itself a "record" or "reference" is a signal to remove it, not to keep it.
 
 ## Implementation
 
@@ -54,12 +52,15 @@ What this plan covers and why.
 ## Context
 Problem being solved.
 
+## Ground Truth
+Key existing files/symbols (verified paths) the implementer needs.
+
 ## Implementation Steps
 
 ### 1. [Step Name]
 **Files to Create**: list
 **Files to Modify**: list
-**Code patterns**: brief example
+**Code**: complete example
 
 ### 2. [Next Step]
 ...
@@ -70,41 +71,45 @@ Problem being solved.
 - [ ] Deployed
 ```
 
+The Ground Truth section and the complete code came in June 2026, when plans were raised to a handoff-ready standard: written so a less capable model can implement them without exploring the codebase, with verified file paths, full code instead of sketches, and `Verify:` markers on any platform or API fact the author has not confirmed.
+
 ### The Index File
 
-`plans/index.md` is the navigation hub:
+The index lists every plan by section. A simplified example:
 
 ```markdown
 # Plans
 
 ## In Progress
-- **[API Rate Limiting](23-api-rate-limiting.md)** - Add rate limits to public API
+- **[API Rate Limiting](api-rate-limiting.md)** - Add rate limits to public API
 
 ## Pending
-- **[Widget Redesign](24-widget-redesign.md)** - New widget UI for iOS 18
+- **[Widget Redesign](widget-redesign.md)** - New widget UI for iOS 18
 
 ## Recently Completed
 (None - implemented plans are removed)
 ```
 
-Every plan creation or removal must update the index. This is non-negotiable.
+Every plan creation or removal updates the index. This is non-negotiable. Entries stay at one to three lines plus a link, and a plan file no index entry points to is a bug.
 
 ### Naming Convention
 
-Plans use sequential numbering with descriptive names:
-- `23-api-rate-limiting.md`
-- `24-widget-redesign.md`
-- `24a-widget-accessibility.md` (sub-plan of 24)
+The skill allows sequential numbers with a letter suffix for sub-plans (`26`, `26a`, `26b`), but in practice every plan in the repos is a descriptive kebab-case name:
+- `astronomy-caching.md`
+- `alert-severity.md`
+- `precipitation-refactoring.md`
 
 ### Creating a Plan
 
-The skill includes pre-implementation checklist:
+The skill's checklist:
 
-1. **Enable research modes** - ultrathink, research mode, web search
+1. **Check if functionality exists** - `grep -r "pattern" app/`
 2. **Check existing plans** - `ls plans/`
-3. **Check if functionality exists** - `grep -r "pattern" app/`
-4. **Write plan with clear steps**
-5. **Update index**
+3. **Write the plan to the handoff-ready standard** - verified paths, complete code, `Verify:` markers
+4. **Update index**
+
+When this post was written the first item was "Enable research modes: ultrathink, research mode, web search." That line was cut in July 2026 when the skills were trimmed to verified content; the rule that survives is "Skip research" under Never, now worded "Search the codebase, existing plans, and the web first."
+
 
 ### Implementing a Plan
 
@@ -117,11 +122,11 @@ git checkout -b implement-api-rate-limiting
 
 # 3. Read plan thoroughly
 # 4. Show implementation summary to user before starting
-# 5. Execute steps with TodoWrite tracking
+# 5. Execute steps, tracking progress with your tool's todo list
 # 6. Test after each major step
 ```
 
-Before starting, present:
+Nothing is executed until the user has seen the summary and agreed:
 
 ```markdown
 ## Implementation Plan
@@ -136,103 +141,93 @@ Ready? [Yes/No]
 
 ### Removing Completed Plans
 
-When a plan is fully implemented:
+When the success criteria are met:
 
 1. **Verify success criteria** - Everything works
-2. **Extract critical rationale** - Add patterns to CLAUDE.md or skills
-3. **Delete the plan file** - `rm plans/23-api-rate-limiting.md`
-4. **Update the index** - Remove the entry
-5. **Commit the removal**
+2. **Extract critical rationale** - Add patterns to a skill or AGENTS.md
+3. **Fix inbound links** - `grep -rln "plan-name.md" plans/` and redirect each one to where the content went
+4. **Delete the plan file** - `rm plans/plan-name.md`
+5. **Update the index** - Remove the entry
+6. **Commit the removal**
+
+The skill's commit template:
 
 ```bash
-rm plans/23-api-rate-limiting.md
-# Edit plans/index.md to remove the entry
+rm plans/XX-plan-name.md
+# Edit PLANS.md - remove entry
 git add -A
-git commit -m "Remove implemented plan: 23-api-rate-limiting
+git commit -m "Remove implemented plan: XX-plan-name
 
-Plan implemented in PR #456.
-Rate limiting patterns preserved in .claude/skills/api/SKILL.md"
+Plan implemented in PR #XXX.
+Critical rationale preserved in [location]."
 ```
+
+The commit message names the PR and the file that now holds the patterns, so the deleted plan leaves a trail. The inbound-links step was added in July 2026 after a sweep found 15 links that had rotted across earlier removals. Skills never link into `plans/` for the same reason: the link dies when the plan does, so a skill cites the PR number and carries what it needs itself.
 
 ## Why This Works
 
-### Versus Todo Lists
-
-Todo lists are good for quick tasks. Plans are good for multi-step work that spans sessions. They capture the "why" and "how," not just the "what."
-
-### Versus Kanban/Issue Trackers
-
-Issue trackers are designed for multiple people over extended time. Plans are designed for one person (or one person + Claude) working on one thing until done.
-
-### Versus Keeping Everything
-
-Keeping implemented plans creates noise. Future you doesn't need to know how the rate limiting was implemented - they need to know how rate limiting works NOW. That goes in documentation or skills, not old plans.
-
-### The Cleanup Discipline
-
-The hardest part is deleting. We're trained to keep everything. But:
-- Old plans get stale
-- Reading outdated plans wastes time
-- If something matters, extract it first
-
-Think of plans like scaffolding: essential during construction, removed when the building is done.
+Keeping implemented plans creates noise. Future you doesn't need to know how the rate limiting was implemented. They need to know how it works now, and that belongs in documentation or skills. The hardest part is deleting, because we're trained to keep everything. But old plans get stale, reading them wastes time, and anything that mattered was extracted first. Plans are scaffolding: essential during construction, removed when the building is done.
 
 ## Critical Rules
 
+As of September 2026, the web repo's list:
+
 ### Never
-- Create plans for past decisions (use CLAUDE.md)
-- Skip research before planning
-- Implement without syncing from main
-- Skip user approval before starting
-- Keep implemented plans around
-- Forget to update the index
+- Create plans for past decisions (use AGENTS.md or skills)
+- Skip research (search the codebase, existing plans, and the web first)
+- Implement without syncing (`git pull origin main` first)
+- Skip user approval (show the implementation plan first)
+- Keep implemented plans (remove and preserve rationale elsewhere)
+- Forget PLANS.md (update every time you create or remove plans)
+- Leave inbound links dangling (grep for the filename and redirect before removing)
+- Keep a plan as a "record", "archive", or "reference library"
+- Leave an orphan (every `plans/*.md` is linked from PLANS.md, or migrated and removed)
 
 ### Always
 - Use research modes for plan creation
-- Verify plan is current before implementing
-- Update index when creating/removing plans
-- Preserve critical rationale before deletion
+- Verify plan currency before implementing
+- Update PLANS.md when creating/removing plans
+- Track with your tool's todo/task list during implementation
+- Preserve critical rationale before removing plans
 - Create fresh branches from main
 
 ## Real Example
 
-Here's a real plan that was created, implemented, and removed:
+A plan from the iOS repo that was created, implemented, and removed. The on-device AI summaries feature had a wrap-up plan covering the last mile: a loading-state glow, a settings screen, and two future phases. Abridged:
 
 **Before implementation:**
 ```markdown
-# API Rate Limiting
+# AI Summaries Wrap-Up
 
 ## Status
 📝 **Planning**
 
-## Implementation Steps
-1. Add redis-based rate limiter
-2. Configure per-endpoint limits in YAML
-3. Add rate limit headers to responses
-4. Add dashboard for viewing limits
-5. Deploy behind feature flag
+## Implementation Phases
+1. Loading state polish (glow view modifier, respect Reduce Motion)
+2. AI Summaries settings screen (toggle, availability status)
+3. Voice/style customization (future)
+4. Brevity control (future)
 
 ## Success Criteria
-- [ ] Tests pass
-- [ ] Rate limits enforced in production
-- [ ] Dashboard accessible to admins
+- [ ] Glow effect displays during summary generation
+- [ ] AI Summaries toggle appears in Settings
+- [ ] Toggle correctly enables/disables generation
 ```
 
-**After implementation:**
-- Plan deleted
-- Patterns added to `.claude/skills/api/SKILL.md`
-- Index updated to remove entry
-- Feature working in production
+**After implementation (February 2026):**
+- Plan deleted, in a PR that removed six finished or obsolete plans at once
+- Rationale preserved in `.claude/skills/summary-service/SKILL.md`
+- Index entry marked complete (the skill now says to remove the entry outright)
+- Feature shipped
 
 The plan served its purpose and was removed.
 
 ## Lessons Learned
 
-- **Living documents, not archives** - Delete when done
-- **Index is the hub** - Keep it current
-- **Research before planning** - Bad plans from bad research
-- **Extract before deleting** - Don't lose critical patterns
-- **Fresh branches always** - Plans assume current main
+- **Keep the document that says how it works now; delete the one that says how it was built.** The second goes stale the moment the first exists.
+- **Check for the thing before planning the thing.** A grep and a look at existing plans are cheaper than a plan for work already done.
+- **A plan is written against a moving main.** Sync and reread it before implementing.
+- **Make the index update part of creating and removing, not a separate chore.** An optional index stops being navigation.
 
 ---
 
@@ -241,3 +236,7 @@ The plan served its purpose and was removed.
 **Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Source: `.claude/skills/planning/SKILL.md`
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on work that spans sessions instead of on project management tools in general, the todo-list and issue-tracker comparisons moved from Why This Works into The Problem, and Lessons Learned replaces the bullets that repeated the title and the Critical Rules with rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The quotes matched the February 2026 skill exactly, so the corrections track what changed since: the index moved from `plans/index.md` to a root `PLANS.md`, CLAUDE.md became AGENTS.md, the "ultrathink, research mode, web search" checklist item was cut, TodoWrite became "your tool's todo list", the plan template gained a Ground Truth section and complete code, and the Critical Rules gained the inbound-link, record, and orphan rules, all now quoted in their current wording with dates. The numbered file names were replaced with the kebab-case names the repos actually use, and the "Real Example" (an API rate-limiting plan, PR #456, and an `api` skill, none of which ever existed) was replaced with a real plan removal from the iOS repo.
