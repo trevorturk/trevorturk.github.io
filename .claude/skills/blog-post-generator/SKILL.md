@@ -115,3 +115,14 @@ Output goes directly to: `_posts/2026-02-27-heroku-capacity.md`
 - **Always use timestamps** in the date field (e.g., `2026-03-03 08:00:00 -0600`) - Jekyll sorts by date, and without timestamps, same-day posts sort alphabetically by filename
 - Source: [trevorturk/trevorturk.github.io](https://github.com/trevorturk/trevorturk.github.io) - Jekyll setup, skills, and all post source
 - **Escape Liquid in code blocks**: Jekyll runs Liquid over post bodies, so any `{%` or `{{` inside a code sample (e.g. Swift `String(format: "\\u{%04X}", ...)`, Jinja/Handlebars templates) breaks the build with `Liquid syntax error: Tag '{%' was not properly terminated`. Wrap such fenced blocks in `{% raw %}` … `{% endraw %}`. Before opening a PR, run `bundle exec jekyll build` locally to catch this.
+
+## Editing Pass
+
+Use this checklist when revising an existing post, and on a new draft before opening its PR.
+
+- **One idea per sentence.** Aim for about 20 words. Split sentences that chain clauses with semicolons or em-dashes. A sentence beats a label with a colon.
+- **Vary openers.** Don't start consecutive paragraphs or sections with the same construction ("The reason for X is...", "Notice that...", "The thing to notice is...").
+- **Short titles.** Keep the title to one clause. Move the detail into `summary:`.
+- **Cut flourishes that carry no information.** Rhetorical asides ("the load-bearing sentence", "fails at 2 a.m.") go unless they add a fact.
+- **Prose only.** Code blocks, dates, numbers, and the substance of Results and Lessons Learned stay identical. Headings stay so cross-links and summaries keep working.
+- **Record the pass.** Add a dated "Editing pass" line to "How This Post Was Made" with the prompt and what changed.
