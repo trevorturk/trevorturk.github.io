@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Designing for the Narrowest Slot: Character Budgets, Native Hour Counters, and a 390-Point Gate"
+title: "Designing for the Narrowest Slot"
 date: 2026-08-24 09:20:00 -0600
 summary: "Designing localized copy for the smallest slot a weather app owns: character budgets for compact date labels, layout-derived point budgets for stat cards, and tests that measure real device ink across 27 languages."
 tags: [swift, ios, localization, i18n, tooling]
@@ -8,23 +8,21 @@ tags: [swift, ios, localization, i18n, tooling]
 
 ## The Problem
 
-A typical weather app shows a number and an icon. [Hello Weather](https://helloweather.com) shows sentences: pressure trends, precip timing, moon phases, air-quality advice, all localized into 27 languages. The text is not decoration around the layout, it *is* the layout, and most of it lives in the narrowest slot the product owns: a weekday tick on a chart axis, an hour label under a bar, a two-line stat card in a two-column grid, a couple of characters on a watch complication. Those slots do not wrap and do not grow.
+A chart's weekday rail holds seven ticks, and each tick holds three characters. `Mon Tue Wed` fits. So does `9am 10am` under the bars of the hourly chart, `Falling fast` on a two-line stat card, and a bare hour on a watch complication. Every one of these slots was drawn in English, looks perfect in English, and does not wrap or grow.
 
-English always fits, which is the trap. You draw the chart with `Mon Tue Wed`, the hour axis with `9am 10am`, the stat card with `Falling fast`, and every one looks perfect. Then a model translates into 25 more languages, and nothing in the toolchain knows how wide any of those strings will be. The German label that is one character too wide clips exactly the same way in the app, the widget, and on the watch, because it is the same string in the same slot. You find out from a screenshot, or from a customer, after you ship.
+Then a model translates the strings into 25 more languages, and nothing in the toolchain knows how wide any of them will be. A German label one character too wide clips the same way in the app, the widget, and on the watch, because it is the same string in the same slot. A language whose weekday abbreviations collapse two days onto the same three letters is worse: the axis renders two identical ticks, a data bug with no visible truncation. Six of the supported languages fail one test or the other straight from the system calendar's abbreviations. Without a gate, the first report comes from a screenshot or a customer, after shipping.
 
-This is a one-person product with no localization agency behind it, so the fix has to be mechanical: something that fails a build, not something that relies on a native speaker eyeballing 27 screenshots. Two instruments do that here. Dates count characters, because a weekday rail is a contract with a hard cap. Stat cards measure ink, because a card is a layout and rendered glyph width is what overflows it.
+[Hello Weather](https://helloweather.com) shows sentences where a typical weather app shows a number and an icon: pressure trends, precip timing, moon phases, air-quality advice, in 27 languages, and most of that text lives in slots like these. It is a one-person product with no localization agency behind it, so the fix has to fail a build rather than rely on a native speaker eyeballing 27 screenshots. Two instruments do that. Dates count characters, because a weekday rail is a contract with a hard cap. Stat cards measure ink, because a card is a layout and rendered glyph width is what overflows it.
 
 ## The Solution
 
-Route every date and time string through one rulebook so the constrained surfaces are enumerable, then gate them with **character-budget** contract tests. Derive the stat-card **point budgets** from the actual grid formula, then gate them with tests that measure real device ink. Neither number is hand-picked, and the exceptions in both are declared as data, so a string somebody decided to keep re-flags the moment its value changes.
+Route every date and time string through one rulebook so the constrained surfaces are enumerable, then gate them with character-budget contract tests. Derive the stat-card point budgets from the grid formula the view uses, then gate them with tests that measure real device ink. Neither number is hand-picked. The exceptions in both are declared as data, so a string somebody decided to keep re-flags the moment its value changes.
 
 ### Compact date labels get a character budget
 
-Every date string flows through one enum of intents, each case naming a UI surface (`hourlyChartWeekday`, `statsChartHour`, `complicationHour`) rather than a format. That is covered in the [date rulebook post](/date-format-rulebook/); what matters here is that because the surfaces are enumerated, a test can iterate the ones that render in a tight slot and assert a hard budget on all of them, in all 27 languages.
+Every date string flows through one enum of intents, each case naming a UI surface (`hourlyChartWeekday`, `statsChartHour`, `complicationHour`) rather than a format. The [date rulebook post](/date-format-rulebook/) covers that enum. What matters here is that enumerated surfaces let a test iterate the ones that render in a tight slot and assert a hard budget on all of them, in all 27 languages.
 
-The compact weekday rail — the row of day ticks along a chart — carries the tightest rule: each label is **at most three characters, letters and digits only, and the seven labels for a week must be pairwise distinct**. That last clause matters most. A language whose abbreviations collapse two days onto the same three letters renders two identical ticks on one axis: a silent data bug, not a visible truncation.
-
-Most languages satisfy this straight from the system calendar's abbreviated or standalone-short symbols. Six do not: their CLDR abbreviations either blow the three-character budget or collide on distinctness, so the classifier returns a hand-declared seven-symbol array with the ruling attached. Here is the resolver and the contract test that enforces it, self-contained:
+The compact weekday rail carries the tightest rule: each label is at most three characters, letters and digits only, and the seven labels for a week must be pairwise distinct. Most languages satisfy it from the system calendar's abbreviated or standalone-short symbols. For the six that do not, the classifier returns a hand-declared seven-symbol array with the ruling attached. Here is the resolver and the contract test that enforces it, self-contained:
 
 ```swift
 import Foundation
@@ -77,13 +75,13 @@ func compactWeekdays(for language: Language) -> [String] {
 }
 ```
 
-Notice that the exception is data, not a code path: the array is reviewable, the same test proves it fits, and the next person can see exactly why German stopped reading its symbols from the calendar. Overriding the platform's locale data feels wrong until you remember that data was optimized for legibility in a paragraph, not for a three-character axis tick that must stay distinct from six neighbors. When the platform optimized for a different constraint than you have, override with declared data and attach the reason.
+Notice that the exception is data, not a code path. The array is reviewable, the same test proves it fits, and the next person can see why German stopped reading its symbols from the calendar. Overriding the platform's locale data feels wrong until you remember that data was optimized for legibility in a paragraph, not for a three-character tick that must stay distinct from six neighbors. When the platform optimized for a different constraint than yours, override with declared data and attach the reason.
 
-The hour labels get a parallel budget: at most five characters, English pinned exactly to `12am…11pm` and `0:00…23:00`. That is why the house voice is `4pm` rather than the CLDR-correct `4 PM` or `4 p.m.`: the labels sit under bars in the hourly chart and cannot be wider than the bars, so the compact form is what the design was drawn with, and the rulebook produces it by assigning bare lowercase meridiem symbols when the formatter is built rather than lowercasing its output. CJK is the interesting decision. Chinese, Japanese, and Korean render a **native hour counter** (`9時`, `9시`) instead of a meridiem, because that is how those languages write a compact clock hour, and because a Latin `am`/`pm` on a CJK digit is both wrong and wider. The watch complication in 24-hour mode goes tighter still — a bare `17`, no colon, no meridiem. Every one of these is pinned in a contract test whose English anchors are typed by a person and never machine-updated, so a careless snapshot re-record cannot quietly bless a regression.
+Hour labels get a parallel budget of at most five characters, with English pinned exactly to `12am…11pm` and `0:00…23:00`. The house voice is `4pm` rather than the CLDR-correct `4 PM` or `4 p.m.` because the labels sit under bars in the hourly chart and cannot be wider than the bars. The rulebook produces that form by assigning bare lowercase meridiem symbols when the formatter is built, rather than lowercasing its output. Chinese, Japanese, and Korean render a native hour counter (`9時`, `9시`) instead of a meridiem. That is how those languages write a compact clock hour, and a Latin `am`/`pm` on a CJK digit is both wrong and wider. The watch complication in 24-hour mode goes tighter still: a bare `17`, no colon, no meridiem. Every one of these is pinned in a contract test whose English anchors are typed by a person and never machine-updated, so a careless snapshot re-record cannot quietly bless a regression.
 
-### Stat cards measure ink, and derive the budget
+### Stat cards measure ink
 
-A weekday tick is a discrete contract, so a character count is exactly the right instrument. A stat card is not: it is a two-line cell in an adaptive grid, and what overflows it is ink — the rendered width of the glyphs. A Cyrillic string and a Latin string of the same length are different widths; an 18-point bold subtitle and a 13-point regular description do not share a budget. So the stat half measures real device ink, and derives the budget it measures against from the grid arithmetic the SwiftUI view actually uses. Change the layout and the budget follows in one line:
+A weekday tick is a discrete contract, so a character count is the right instrument. A stat card is a two-line cell in an adaptive grid, and what overflows it is ink: the rendered width of the glyphs. A Cyrillic string and a Latin string of the same length are different widths, and an 18-point bold subtitle and a 13-point regular description do not share a budget. So the stat half measures real device ink, and derives the budget it measures against from the grid arithmetic the SwiftUI view uses. Change the layout and the budget follows in one line:
 
 ```swift
 import UIKit
@@ -117,11 +115,11 @@ func grade(_ string: String, size: CGFloat = 13, weight: UIFont.Weight = .regula
 }
 ```
 
-The 390 is the whole point: the narrowest iPhone still on sale. A legacy 375-point figure lives in the file too, but it is informational only — reported so you can see what would clip on older hardware, never gating, and never a reason to shorten copy. There is also no separate English ceiling: an English string over the grid is a finding, not a new budget invented to make it pass. `descriptionBudget` here works out to 142 points, with a `MARGIN` band 5% under it worth a device glance.
+The 390 is the narrowest iPhone still on sale. A legacy 375-point figure lives in the file too, but it is informational only: reported so you can see what would clip on older hardware, never gating, and never a reason to shorten copy. There is no separate English ceiling either. An English string over the grid is a finding, not a new budget invented to make it pass. `descriptionBudget` here works out to 142 points, with a `MARGIN` band 5% under it worth a device glance.
 
 ### The always-on gate pins the known-tight strings
 
-That helper runs at two tiers. The always-on tier is small, fast, and fails `bin/unit-test` if a hand-curated set of the known-tightest lines goes over — the widest pressure trend per language, timed precip strings, a few fixed singles. It is the critical set, and it measures on the device font every run:
+That helper runs at two tiers. The always-on tier is small and fast. It fails `bin/unit-test` if a hand-curated set of the known-tightest lines goes over: the widest pressure trend per language, timed precip strings, a few fixed singles. It is the critical set, and it measures on the device font every run:
 
 ```swift
 import Testing
@@ -156,13 +154,13 @@ struct StatWidthTests {
 }
 ```
 
-The second tier is a full sweep, env-gated so it never runs under CI. It grades every stat-card slot in all 27 languages against both the catalog values and the live strings from our server — many of the widest strings are composed server-side and returned localized, so the report reads the web repo's locale files directly and pulls them in. Its output is a blessed markdown report, reviewed on every change like a copy edit, and it carries its own adjudications: a row that is over budget on purpose is pinned by exact value in an `accepted` map, so an allowed over-budget term re-flags the instant its string changes. "This canonical term has no shorter natural form" is a legitimate outcome; "we stopped looking" is not — pinning the value is the difference.
+The second tier is a full sweep, env-gated so it never runs under CI. It grades every stat-card slot in all 27 languages against both the catalog values and the live strings from our server. Many of the widest strings are composed server-side and returned localized, so the report reads the web repo's locale files directly and pulls them in. Its output is a blessed markdown report, reviewed on every change like a copy edit. A row that is over budget on purpose is pinned by exact value in an `accepted` map, so an allowed over-budget term re-flags the instant its string changes. "This canonical term has no shorter natural form" is a legitimate outcome. "We stopped looking" is not, and pinning the value is the difference.
 
-A drift tripwire keeps the two tiers honest: it fails the build the moment the set of stat cards changes and names the files to update, so nobody can add a card that the always-on gate keeps passing while the report silently stops covering it.
+A drift tripwire keeps the two tiers honest. It fails the build the moment the set of stat cards changes and names the files to update, so nobody can add a card that the always-on gate keeps passing while the report silently stops covering it.
 
 ### The runtime policy is shrink, never truncate
 
-Budgets and tests keep copy inside the slot at author time; the view still needs a safety net at render time for the string that slips through, or the accessibility size that inflates everything. The policy is to scale down, never clip mid-word. Descriptions tolerate a gentler `minimumScaleFactor` than the bolder, tighter subtitles, and both are pinned to a single line so the grid row height never jumps:
+Budgets and tests keep copy inside the slot at author time. The view still needs a safety net at render time for the string that slips through, or the accessibility size that inflates everything. The policy is to scale down, never clip mid-word. Descriptions tolerate a gentler `minimumScaleFactor` than the bolder, tighter subtitles, and both are pinned to a single line so the grid row height never jumps:
 
 ```swift
 import SwiftUI
@@ -192,22 +190,21 @@ struct StatCard: View {
 }
 ```
 
-The residual `OVER` rows in the full report are the ones this net catches: adjudicated as scale-covered and recorded so the next reader knows they were a decision. The scale factor is the floor of last resort, not a license to skip the budget — a card whose default text needs shrinking on the narrowest phone is still a finding.
+The residual `OVER` rows in the full report are the ones this net catches, adjudicated as scale-covered and recorded so the next reader knows they were a decision. The scale factor is the floor of last resort, not a license to skip the budget. A card whose default text needs shrinking on the narrowest phone is still a finding.
 
 ## Results
 
-- **Compact weekday rail:** at most three characters, letters and digits only, seven distinct labels per language, enforced across all 27 languages by one contract test. Six languages (Danish, German, Norwegian, Portuguese, Romanian, Thai) carry declared arrays with the ruling attached, because their CLDR abbreviations broke the budget or the distinctness rule.
-- **Compact hours** pin English exactly and render native counters (`9時`, `9시`) for CJK instead of a bolted-on Latin meridiem; the 24-hour complication hour is a bare digit. Support answers "why does the German label look different?" with a committed array, not a guess.
-- **Stat-card budgets** are derived from the 390-point grid formula, so a spacing change is a one-line edit and every budget follows. The legacy 375-point floor is informational only, and there is no separate English ceiling.
-- **Two measurement tiers** — an always-on critical set on the device font, plus an env-gated full sweep that also pulls server-owned strings — mean a width regression fails a build instead of reaching a screenshot. Recalibrating the floor from 375 to 390 let a batch of over-shortened server phrases go back to their fuller wording, with the report proving each longer string now fit.
+- One contract test enforces the weekday rule across all 27 languages. Six (Danish, German, Norwegian, Portuguese, Romanian, Thai) carry declared arrays with the ruling attached, so "why does the German label look different?" is answered by a committed array, not a guess.
+- A width regression fails `bin/unit-test` instead of reaching a screenshot. The env-gated sweep extends that to server-owned strings, at the cost of a committed report to re-bless on every copy change.
+- Recalibrating the floor from 375 to 390 let a batch of over-shortened server phrases go back to their fuller wording, with the report proving each longer string now fit.
+- The residual over-budget rows are covered by `minimumScaleFactor` rather than shorter copy, and each one is recorded as a decision.
 
 ## Lessons Learned
 
-- **Budget the narrowest slot you actually sell** — the narrowest hardware currently on the market, not the smallest that ever existed and not the one on your desk. Writing that one number down settles a hundred later arguments about whether a row "really" overflows.
-- **Derive budgets from the layout, don't hand-pick them.** The stat budgets are grid arithmetic copied into the test, so they can never drift from the view; a hand-picked number rots the moment someone changes a spacing constant.
-- **Count characters for contracts, measure ink for review.** A weekday rail is a hard discrete cap, so a font-independent character budget is exactly right; a stat card is continuous layout, so only rendered width on the real device font tells the truth.
-- **Declare the exceptions as data.** German's weekday array and an accepted over-budget row are both data with a reason attached, which is what lets you override the platform or keep an unshrinkable string without the override quietly rotting — the test still proves the array fits, and the pinned value re-flags if it changes.
-- **Make the generator fail when reality moves.** A committed report nobody notices has gone stale is worse than no report; a tripwire that fails the build when the stat-card set changes, and names the files to fix, is what keeps the artifact honest.
+- **Budget the narrowest slot you actually sell.** Not the smallest device that ever existed, and not the one on your desk. Writing that number down settles later arguments about whether a row "really" overflows.
+- **Derive budgets from the layout, never hand-pick them.** A number copied from the grid arithmetic cannot drift from the view. A hand-picked one rots when someone changes a spacing constant.
+- **Pin every exception by exact value.** An override of platform data or an accepted over-budget string is fine as data with a reason attached, because it re-flags the moment the value changes.
+- **Fail the build when the covered set changes.** A report that goes stale without anyone catching it is worse than no report.
 
 ---
 
@@ -216,3 +213,5 @@ The residual `OVER` rows in the full report are the ones this net catches: adjud
 **Prompt:** "dispatch research into web/ios about how to ios/web handles localization, including developer tooling, snapshot testing, space-constrained date formats, artifact generation for review, email tooling for support workflows with translation bugs, anything else you can find that's relevant to localization work in ios/web. I'd like an ELI5 explainer that's very brief that I can share via email … I'd also like you to dispatch research into the blog repo to make sure we're covering all of the localization related topics as individual blog posts … then agents to draft the new blog posts …"
 
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the weekday rail and the six languages whose abbreviations break it, the title is one clause, Results drops the bullets that restated the Solution, and Lessons Learned is four rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

@@ -10,18 +10,13 @@ tags: [cloudfront, aws, caching, architecture]
 
 ## The Problem
 
-[Hello Weather](https://helloweather.com) aggregates data from multiple upstream weather providers. Each provider has rate limits, latency variations, and occasional outages. Calling them directly from our app means:
+Most weather providers charge per request, and thousands of [Hello Weather](https://helloweather.com) users ask about the same places at the same times. Calling the providers directly meant paying for every one of those requests, and cost was not the only problem. Each provider has its own rate limits, so a busy hour risked tripping them. Each response took as long as the upstream took, so latency varied from request to request. When a provider went down, the app felt it immediately.
 
-- **Rate limit risk** - Thousands of users hitting the same endpoints
-- **Latency variance** - Each request depends on upstream response time
-- **Cascading failures** - If a provider goes down, our app feels it immediately
-- **Cost** - Most providers charge per request
-
-We needed a caching layer that could handle our scale without complex infrastructure.
+We needed a caching layer that could absorb that load without complex infrastructure.
 
 ## The Solution
 
-CloudFront as an "infinite cache" sitting between our app and each upstream provider. Each data source gets its own CloudFront distribution. Our app hits CloudFront, CloudFront hits the origin only when needed.
+Put CloudFront between the app and each provider as an "infinite cache." Every data source gets its own distribution. The app calls CloudFront, and CloudFront calls the origin only on a miss.
 
 ### Architecture
 
@@ -37,7 +32,7 @@ Client Request
                             └─> Return to client
 ```
 
-**Each source has its own distribution:**
+Each source's distribution is configured by host:
 
 ```bash
 # Environment variables
@@ -46,26 +41,24 @@ AERIS_CDN_HOST=d456def.cloudfront.net
 PIRATEWEATHER_CDN_HOST=d789ghi.cloudfront.net
 ```
 
-This isolation means issues with one source don't affect others.
+A problem at one origin stays inside one distribution and never touches the others.
 
 ## Implementation
 
 ### The Cache Key Problem
 
-Standard CDN caching uses URL + headers as the cache key. But weather requests have a problem: we want multiple requests for "weather at lat/lon" to hit the same cache entry, even if made at different times.
-
-Naive approach:
+A CDN keys its cache on the URL plus the headers you tell it to vary on. For weather that is not quite enough. Two requests for the same lat/lon made at different times should land on the same cache entry, and a duration-based header does not give you that:
 
 ```ruby
 # Different every request = always cache miss
 headers["Cache-Control"] = "max-age=900"  # 15 minutes
 ```
 
-The problem is each request generates a different expiration time, creating different cache keys.
+Each request computes its own expiration from the moment it is made, so no two requests share a key and nothing is ever a hit.
 
 ### The Cache-Expires Solution
 
-Instead of "how long to cache," we send "when does this expire" - a fixed boundary time:
+Instead of "how long to cache," send "when this expires," as a fixed boundary time:
 
 ```ruby
 def cdn_headers_for(cache_level)
@@ -86,7 +79,7 @@ def cdn_headers_for(cache_level)
 end
 ```
 
-Now requests at different times produce the same header:
+Every time-based branch rounds down to a boundary and then adds one second past it. `:weekly` sends a version string instead of a time. Requests made at different times inside the same window now produce the same header:
 
 ```ruby
 # Request at 01:05 UTC → Cache-Expires: 02:00 UTC (miss)
@@ -110,7 +103,7 @@ Different data types need different freshness:
 
 ### 15-Minute Buckets
 
-For current conditions, we bucket into 15-minute windows:
+Current conditions bucket into 15-minute windows:
 
 ```ruby
 def cdn_15_minutes
@@ -125,7 +118,7 @@ end
 
 ### The get() Helper
 
-Source adapters use a simple interface:
+Source adapters name the cache level and the URL, and nothing else:
 
 ```ruby
 def currently_data
@@ -134,7 +127,7 @@ def currently_data
 end
 ```
 
-Under the hood, `get()` adds the cache headers and tracks hits:
+Under the hood, `get()` adds the cache headers and counts hits and misses:
 
 ```ruby
 def get(cache_level, url, headers = {})
@@ -151,7 +144,7 @@ end
 
 ### Api::AsyncHttp
 
-The HTTP client validates CDN usage:
+The HTTP client refuses any CloudFront request that would key the cache wrong:
 
 ```ruby
 class Api::AsyncHttp
@@ -180,7 +173,7 @@ class Api::AsyncHttp
 end
 ```
 
-This prevents accidental cache pollution from new headers.
+A new header added elsewhere would silently change the cache key. The allowlist turns that into an exception at the call site.
 
 ### Additional Cache Key Headers
 
@@ -194,7 +187,7 @@ Beyond `Cache-Expires`, we include:
 
 ## Debugging Cache Behavior
 
-CloudFront tells you what happened:
+CloudFront reports what happened on every response:
 
 ```bash
 curl -I "https://d123abc.cloudfront.net/endpoint?lat=41.87&lon=-87.62"
@@ -216,22 +209,20 @@ Age: 123                       # Seconds since cached
 
 ## Related: Timeout Tuning
 
-This CDN architecture creates the need for per-source timeout tuning, which we cover in [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/). Each source has different latency characteristics, and CloudFront logs help us tune timeouts appropriately.
+Each source has its own latency profile, so this architecture creates a need for per-source timeout tuning. [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/) covers how CloudFront logs drive those timeouts.
 
 ## Results
 
-- **Cache hit rates 60-80%** for frequently accessed locations
-- **Upstream costs reduced** - Fewer origin requests
-- **Reliability improved** - CloudFront shields us from brief outages
-- **Latency reduced** - Edge locations serve cached responses faster
+- Cache hit rates of 60-80% for frequently accessed locations.
+- Fewer origin requests, so lower upstream costs.
+- CloudFront shields the app from brief provider outages, and edge locations serve cached responses faster than the origin would.
 
 ## Lessons Learned
 
-- **Boundary times, not durations** - The key insight that makes caching work
-- **Per-source distributions** - Isolation prevents cross-contamination
-- **Validate CDN headers** - Runtime checks prevent cache pollution
-- **Track cache hits** - Visibility into savings and behavior
-- **Different data, different TTLs** - One cache policy doesn't fit all
+- **One distribution per origin.** Isolation is cheaper than debugging one source's bad responses showing up in another's cache.
+- **Reject unapproved cache headers at the client.** A stray header is a silent miss forever; an exception is a bug you find in development.
+- **Count hits and misses at the call site.** Without a tracker, the savings are invisible and so are regressions.
+- **Set the TTL per data type.** The freshness the UI needs decides the boundary, and one policy cannot serve a nowcast and a moon phase.
 
 ---
 
@@ -240,3 +231,5 @@ This CDN architecture creates the need for per-source timeout tuning, which we c
 **Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Architecture credit: [@nickyleach](https://github.com/nickyleach). Sources: `app/models/api/async_http.rb`, `.claude/skills/cdn-caching/SKILL.md`
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The Problem now opens on per-request pricing and shared locations as prose instead of a bullet list, each code sample is followed by what to notice rather than a restatement, and Lessons Learned drops the bullet that repeated the Cache-Expires section in favor of four rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

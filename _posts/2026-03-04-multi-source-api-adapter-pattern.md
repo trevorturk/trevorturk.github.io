@@ -2,35 +2,32 @@
 layout: post
 title: "Multi-Source API Adapter Pattern in Ruby"
 date: 2026-03-04 09:00:00 -0600
-summary: "A pattern for normalizing multiple external APIs into a unified interface with automatic unit conversion."
+summary: "Each source adapter declares the units it returns, a converter turns them into the units the customer asked for, and Alba serializers shape the response. Adding a vendor touches no existing code."
 tags: [ruby, architecture, api, patterns]
 ---
 
 ## The Problem
 
-When building an application that aggregates data from multiple external APIs, you quickly hit several challenges:
+One vendor returns Fahrenheit and miles per hour, with humidity as `85`. Another returns Celsius, meters per second, and precipitation in millimeters. A third mixes systems inside a single response: Fahrenheit temperatures next to precipitation in centimeters, pressure in millibars, and moon phase as a number from 0 to 360 rather than 0 to 1. Each wraps those values in its own JSON structure.
 
-1. **Inconsistent data formats** - Each source returns different JSON structures
-2. **Unit mismatches** - One API returns Celsius, another Fahrenheit; one uses km/h, another mph
-3. **Customer flexibility** - Users want data in their preferred units regardless of source
-4. **Maintainability** - Adding new sources shouldn't require touching existing code
+The application behind this post is a weather API backed by 10+ vendor sources, and its customers choose their own units. A request for SI has to come back in SI whether the data came from the Fahrenheit vendor or the Celsius one. With that many sources, adding the next one cannot mean editing the ones already in production.
 
 ## The Solution
 
-We built a multi-source adapter pattern with three key concepts:
+Four parts, each with one job:
 
 - **Source adapters** normalize external API data into a standard internal shape
-- **Source units** declare what units each adapter returns (so the system knows what it's working with)
-- **A converter** transforms data from source units to requested return units
+- **Source units** declare what units each adapter returns
+- **A converter** transforms data from source units to the requested return units
 - **Output serializers** render the final response format
 
-The architecture keeps each concern isolated: adapters focus on parsing external data, the converter handles math, and serializers handle formatting.
+Adapters parse, the converter does math, and serializers format. None of them reaches into another's internals.
 
 ## Implementation
 
 ### The Main Interface
 
-The entry point coordinates everything. It accepts parameters for source selection, coordinates, and desired output units:
+One class coordinates a request. It takes the source name, coordinates, and the units the customer wants, and every data point it exposes has already been through the converter:
 
 ```ruby
 class Api::Weather
@@ -57,11 +54,11 @@ class Api::Weather
 end
 ```
 
-The key insight: every data point passes through the converter, which knows both what units the source provides and what units the customer requested.
+The converter is built once per request from two inputs: the units the chosen source declares and the units the customer asked for. Nothing downstream of `currently` ever sees a raw vendor value.
 
 ### Source Adapters
 
-Each external API gets an adapter class inheriting from a base:
+Each external API gets one class inheriting from a base. The base fixes the interface: which units this source uses, how to return current conditions, and an optional hook for fetching in parallel.
 
 ```ruby
 class Api::Sources::Base
@@ -83,7 +80,7 @@ class Api::Sources::Base
 end
 ```
 
-A concrete adapter maps the external API's structure to the internal shape:
+A concrete adapter is mostly a field map from the vendor's structure to the internal one:
 
 ```ruby
 class Api::Sources::ExampleWeather < Api::Sources::Base
@@ -104,9 +101,11 @@ class Api::Sources::ExampleWeather < Api::Sources::Base
 end
 ```
 
+The adapter knows nothing about the customer's units. It reports its own, US with integer percentages here, and leaves conversion to the converter. The two sentinel constants are both `nil` at runtime; they exist so a field mapped to `DATA_MISSING` reads differently from one mapped to `DATA_PENDING`.
+
 ### Source Units vs Return Units
 
-This is where the pattern shines. Each source declares what units it returns:
+One unit system per source would not have been enough, because real vendors mix systems in one payload. So the units object takes a base system plus per-field overrides:
 
 ```ruby
 # Source A: returns Fahrenheit, mph, percentages as integers
@@ -133,11 +132,11 @@ def source_units
 end
 ```
 
-The units object supports overrides for individual measurements, handling real-world APIs that mix unit systems.
+Source C is US for temperature and wind but metric for precipitation, and its declaration says so field by field. The converter trusts that declaration completely. It has no way to check it against the data.
 
 ### The Converter
 
-The converter does the math to transform between unit systems:
+The converter is a lookup table of pure functions keyed by `[from, to]` pairs, one table per measurement type:
 
 ```ruby
 class Api::Converter
@@ -159,11 +158,11 @@ class Api::Converter
 end
 ```
 
-The pattern repeats for each measurement type: wind speed, pressure, visibility, precipitation, etc.
+When source and return units already match, the value passes through untouched. The same shape repeats for wind speed, pressure, visibility, precipitation, and the rest.
 
 ### Output Serializers with Alba
 
-Finally, [Alba](https://github.com/okuramasafumi/alba) serializers define the JSON structure:
+The last layer is formatting. [Alba](https://github.com/okuramasafumi/alba) serializers define the JSON structure, and the base output lists the fields every response carries:
 
 ```ruby
 class Api::Outputs::Base
@@ -186,7 +185,7 @@ class Api::Outputs::Base
 end
 ```
 
-Different output formats (minimal, full, custom) just inherit and add attributes:
+Output variants inherit and add attributes rather than redefining the structure:
 
 ```ruby
 class Api::Outputs::Full < Api::Outputs::Base
@@ -196,7 +195,11 @@ class Api::Outputs::Full < Api::Outputs::Base
 end
 ```
 
+The serializer only ever sees converted values, so one class serves a request in any unit system. A minimal, full, or custom output is a subclass, not a branch in the coordinator.
+
 ## Data Flow
+
+A request for source `foo` in SI units passes through the layers in order:
 
 ```
 Request (source=foo, units=si)
@@ -220,7 +223,7 @@ Response (data in SI units)
 
 ## Adding a New Source
 
-The beauty of this pattern: adding a new source is mechanical:
+Adding a source is mechanical:
 
 1. Create `Api::Sources::NewSource < Api::Sources::Base`
 2. Implement data-fetching methods
@@ -228,19 +231,14 @@ The beauty of this pattern: adding a new source is mechanical:
 4. Declare `source_units` accurately
 5. Add to the source registry
 
-No changes needed to the converter, outputs, or existing sources.
+The converter, the outputs, and the existing sources do not change. Step 4 is where the pattern's risk sits. Declaring Celsius for a vendor that sends Fahrenheit produces plausible-looking wrong numbers, and nothing downstream can tell.
 
 ## Lessons Learned
 
-- **Declare source units explicitly** - Assuming units leads to subtle bugs. Each source adapter must declare what it actually returns.
-
-- **Handle mixed units** - Real APIs are messy. A source might return Fahrenheit temperatures but millimeter precipitation. The units system must support per-field overrides.
-
-- **Lazy loading saves costs** - External APIs charge per request. Only fetch data that's actually needed. The adapter pattern supports this naturally with memoization.
-
-- **Converters should be pure** - Given the same inputs, conversions produce the same outputs. No side effects, easy to test.
-
-- **Sentinels document intent** - Using `DATA_MISSING` vs `DATA_PENDING` vs `DATA_SKIPPED` makes it clear why a field is nil: unavailable, not-yet-implemented, or intentionally omitted.
+- **Declare units per source and per field.** Assuming a vendor's units leads to subtle bugs, and a vendor can mix systems in one payload.
+- **Fetch lazily, because external APIs charge per request.** Memoized accessors on the adapter mean only the data the output asks for is fetched.
+- **Keep converters pure.** Same inputs, same outputs, no side effects, so each conversion is easy to test in isolation.
+- **Use sentinels to say why a field is nil.** `DATA_MISSING`, `DATA_PENDING`, and `DATA_SKIPPED` all resolve to nil, but each records a different reason: unavailable, not yet implemented, or intentionally omitted.
 
 ---
 
@@ -249,3 +247,5 @@ No changes needed to the converter, outputs, or existing sources.
 **Prompt:** "create a post, use the post skill, and pr skill, do a writeup of the basics of the Api::Weather system, we have the standard interface / entrypoint, then source adapters, source_units, return_units, the converter, and outputs using alba. Review the readme carefully, especially the part about how to add new source adapters. Review Api::Weather and Api::Converter etc. provide concise examples to illustrate the system, but not complete code. We don't want to share all the 'secret sauce' here, but we want to provide the pattern for other people to consider for adaptation in their own projects. remember to save this prompt for the pr etc."
 
 Generated by Claude using the blog-post-generator skill. Based on code review of a production weather API system with 10+ source adapters.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The Problem now opens on three vendors' mismatched units instead of a generic list of challenges, each Implementation section says why before the code and what the code cannot enforce after it, and Lessons Learned merged the two bullets that repeated the body. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

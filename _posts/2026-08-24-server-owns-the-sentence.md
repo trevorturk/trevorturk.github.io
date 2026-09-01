@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Server Owns the Sentence: Codes Not Prose, Universal Punctuation, and One Alias Table Between Two Language Lists"
+title: "Server Owns the Sentence"
 date: 2026-08-24 09:30:00 -0600
 summary: "Localize codes at the edge instead of composing English sentences in the middle, own display punctuation in one server-side rule, and know the direction of every language alias table so an inversion doesn't flip your outbound codes."
 tags: [ruby, api-design, localization, i18n]
@@ -10,27 +10,27 @@ tags: [ruby, api-design, localization, i18n]
 
 A weather API returns two kinds of text, and only one of them is yours.
 
-The first kind is prose an upstream data source already wrote: a summary sentence for the hour, a daily narrative. When the source supports the requested language, that text arrives localized and you pass it through. Our companion post on [probing vendor language support](/probing-vendor-language-support/) is about knowing whether that prose is real or a silent English fallback.
+The first kind is prose an upstream data source already wrote: a summary sentence for the hour, a daily narrative. When the source supports the requested language, that text arrives localized and you pass it through. The companion post on [probing vendor language support](/probing-vendor-language-support/) is about knowing whether that prose is real or a silent English fallback.
 
-The second kind is text *you* derive: an air-quality level name, a pressure-trend phrase, a condition-code description. This text does not exist until your server composes it, and the moment it composes in English you have created a localization debt you may never be able to pay. A field that ships as `"Health effects possible."` is a finished English sentence. There is no seam left to translate it at. The client receives prose, not data, and prose in the wrong language cannot be fixed downstream.
+The second kind is text you derive: an air-quality level name, a pressure-trend phrase, a condition-code description. It does not exist until your server composes it. A field that ships as `"Health effects possible."` is a finished English sentence with no seam left to translate at. The client receives prose, not data, and prose in the wrong language cannot be fixed downstream.
 
-The trap is subtle because the English path always works. The app looks great, and the bill comes due six months later when a customer in another language reports half the forecast screen is in English. By then the sentence is load-bearing in a dozen call sites.
+The trap is that the English path always works. The app looks fine, and the bill comes due six months later when a customer in another language reports half the forecast screen in English. By then the sentence is composed in a dozen call sites.
 
-At [Hello Weather](https://helloweather.com) the derived fields are localized on the server, in the same request, pinned to the request's language, and the app renders them verbatim. This post is the server-composition side of localization: composing text that is translatable by construction, owning display punctuation in exactly one place, and bridging two independently-maintained language lists with an alias table whose *direction* you understand.
+At [Hello Weather](https://helloweather.com) the derived fields are localized on the server, in the same request, pinned to the request's language, and the app renders them verbatim. This post is the server side of that arrangement: composing text that is translatable by construction, owning display punctuation in one place, and bridging two independently maintained language lists with an alias table whose direction you understand.
 
 ## The Solution
 
 Three rules, each cheap, each with a failure mode that only shows up in a non-English request:
 
 1. **Ship codes, not sentences.** Every descriptive field is a machine code plus, optionally, a localized `_name`/`_phrase` companion resolved through a helper pinned to the request's language. The server never composes an English sentence it cannot later translate.
-2. **Bridge language lists in one direction each.** Derive the valid-language set from one source of truth, normalize inbound codes through an alias table, validate by inclusion, and reject the rest. Keep the outbound provider-code table separate from the inbound alias table, because one is the *inverse* of the other and inversion is lossy.
-3. **Own display punctuation universally.** One rule, one concern, every output shape, every consumer. Strip, normalize, terminate (except where a language doesn't terminate), upcase the first letter. Clients render the result byte-for-byte.
+2. **Bridge language lists in one direction each.** Derive the valid-language set from one source of truth, normalize inbound codes through an alias table, validate by inclusion, and reject the rest. Keep the outbound provider-code table separate from the inbound alias table, because one is the inverse of the other and inversion is lossy.
+3. **Own display punctuation universally.** One rule, one concern, every output shape, every consumer. Strip, normalize, terminate (except where a language doesn't terminate), upcase the first letter. Clients render the result byte for byte.
 
-The connective tissue under all three is a test discipline: **default snapshots are English-only, so a language-dependent change has to assert a non-English language or it ships broken silently.**
+Under all three sits one test discipline: default snapshots are English-only, so a language-dependent change has to assert a non-English language or it ships broken silently.
 
 ### Codes, Not Sentences
 
-The whole architecture rests on one helper. In the class that derives attributes, `t()` resolves an I18n key against the language the request asked for — never `I18n.locale`, never a thread default. The language is a property of the parsed request, threaded through explicitly, so every derived string comes out in one language no matter how concurrently the server is composing. A pressure trend then ships as a stable, language-free code beside a localized label, and the client switches on the code for logic and renders the label for display:
+The architecture rests on one helper. In the class that derives attributes, `t()` resolves an I18n key against the language the request asked for, never `I18n.locale` and never a thread default. The language is a property of the parsed request, threaded through explicitly, so every derived string comes out in one language no matter how concurrently the server is composing. A pressure trend then ships as a stable, language-free code beside a localized label. The client switches on the code for logic and renders the label for display:
 
 ```ruby
 require "i18n"
@@ -76,15 +76,15 @@ class DerivedAttributes
 end
 ```
 
-The field pair is what to notice. A `de` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Fallend"}`; an `en` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Falling"}`. The code is identical across languages, so client logic never parses prose; only the companion is translated, at the one seam that holds the language.
+The field pair is what to notice. A `de` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Fallend"}`, and an `en` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Falling"}`. The code is identical across languages, so client logic never parses prose. Only the companion is translated, at the one seam that holds the language.
 
-The verbose `case` is the safety, not clutter to remove. Dynamic key lookup turns a missing translation into a *shipped string*: I18n returns `"translation missing: ..."`, which is not an error but content, and it renders on a customer's screen. The exhaustive `case` with a raising `else` turns the same gap into a failed test — a bug you hear about from CI, not from a customer reading "translation missing" in their forecast. Keep the case structure when you localize; do not "simplify" it into an interpolation.
+The verbose `case` is the safety, not clutter to remove. Dynamic key lookup turns a missing translation into a shipped string: I18n returns `"translation missing: ..."`, which is content rather than an error, and it renders on a customer's screen. The exhaustive `case` with a raising `else` turns the same gap into a failed test, a bug you hear about from CI instead of from a customer. Keep the case structure when you localize; do not simplify it into an interpolation.
 
 ### One Language List, Two Directions of Aliasing
 
-The valid-language set is derived once, at boot, from the framework's own locale registry — `Rails.application.config.i18n.available_locales` — so there is no second hardcoded list to drift against. Add a locale file and the language becomes valid; the 27 codes (`en cs da de el es fi fr hi hu id it ja ko nb nl pl pt ro ru sv th tr uk vi zh zh_TW`) are exactly the set of files on disk. Validation is then one line — `validates :language, inclusion: { in: LANGUAGE }` — and an unknown code is a clean `400`.
+The valid-language set is derived once, at boot, from the framework's own locale registry, `Rails.application.config.i18n.available_locales`, so there is no second hardcoded list to drift against. Add a locale file and the language becomes valid. The 27 codes (`en cs da de el es fi fr hi hu id it ja ko nb nl pl pt ro ru sv th tr uk vi zh zh_TW`) are exactly the set of files on disk. Validation is then one line, `validates :language, inclusion: { in: LANGUAGE }`, and an unknown code is a clean `400`.
 
-Between the wire and that validation sits normalization. Clients send codes in whatever shape their platform hands them: BCP47 (`de-DE`, `zh-TW`), script codes (`zh-Hans`, `zh-Hant`), legacy provider codes (`zh-tw`), or bare simple codes (`de`). All normalize to the internal simple key first. The subtlety: there are two alias tables running in opposite directions, and folding one into the other is a bug invisible until it ships.
+Between the wire and that validation sits normalization. Clients send codes in whatever shape their platform hands them: BCP47 (`de-DE`, `zh-TW`), script codes (`zh-Hans`, `zh-Hant`), legacy provider codes (`zh-tw`), or bare simple codes (`de`). All normalize to the internal simple key first. The subtlety is that two alias tables run in opposite directions, and folding one into the other is a bug invisible until it ships.
 
 ```ruby
 # BCP47_TO_SIMPLE is a bijection — one canonical tag per simple code — so its
@@ -119,9 +119,9 @@ normalize_language("pt-BR")    # => "pt-BR"  (no alias; fails validation → 400
 SIMPLE_TO_BCP47["pt"]          # => "pt-PT"
 ```
 
-Read the comment twice. `BCP47_TO_SIMPLE` is a bijection precisely so inverting it is lossless: one canonical BCP47 tag per simple code. The inbound-only aliases (`zh-Hans`, `no`, the lowercase variants) are many-to-one, so they cannot go in the invertible map without the inversion picking an arbitrary winner. Adding an innocent-looking `"pt-BR" => "pt"` to the canonical map would flip the *outbound* Portuguese sent to providers from `pt-PT` to `pt-BR`. That is why the conveniences sit in a separate `merge` on top, and why `pt-BR` is deliberately not an alias at all: it is rejected like any unknown code. **The transferable rule: an alias table has a direction, and if you ever invert it, the un-inverted table must be a bijection.**
+`BCP47_TO_SIMPLE` is a bijection precisely so that inverting it is lossless: one canonical BCP47 tag per simple code. The inbound-only aliases (`zh-Hans`, `no`, the lowercase variants) are many-to-one, so they cannot go in the invertible map without the inversion picking an arbitrary winner. An innocent-looking `"pt-BR" => "pt"` in the canonical map would flip the outbound Portuguese sent to providers from `pt-PT` to `pt-BR`. That is why the conveniences sit in a separate `merge` on top, and why `pt-BR` is deliberately not an alias at all: it is rejected like any unknown code. An alias table has a direction, and if you ever invert it, the un-inverted table must be a bijection.
 
-Now the honest part. The client keeps its *own* 27-case language list, and there is **no automated cross-repo parity test between the two.** Add a language on the client and not the server, and nothing in either repo's CI fails at the seam. The only guards are the server's alias table (which normalizes the client's `zh-Hans` into `zh`) and the inclusion validation (which returns `400` for anything unrecognized). That is a deliberate, slightly uncomfortable place to stand: two lists, one bridge, no compiler holding them together. It works because the bridge is small, centralized, and reviewed as the seam it is. The one place the coupling is made explicit is the client's [rendered-width validator](/rendered-width-validation/), which reads the server's locale files to measure server-composed strings against real device fonts — the two repos share no code, but they share the strings, and the width tool checks them in the font they'll appear in.
+The client keeps its own 27-case language list, and there is no automated cross-repo parity test between the two. Add a language on the client and not the server, and nothing in either repo's CI fails at the seam. The only guards are the server's alias table, which normalizes the client's `zh-Hans` into `zh`, and the inclusion validation, which returns `400` for anything unrecognized. That is a deliberate, slightly uncomfortable place to stand: two lists, one bridge, no compiler holding them together. It works because the bridge is small, centralized, and reviewed as the seam it is. The one place the coupling is made explicit is the client's [rendered-width validator](/rendered-width-validation/), which reads the server's locale files to measure server-composed strings against real device fonts. The two repos share no code, but they share the strings, and the width tool checks them in the font they will appear in.
 
 ### One Punctuation Rule, Owned Once
 
@@ -160,15 +160,13 @@ module Punctuation
 end
 ```
 
-`punctuate_summary` does the full pass: strip, turn exclamation points into periods, collapse runs of terminators, append a period unless the string is blank or already terminated, and upcase the first character. CJK and Thai append nothing and let native terminators through; the danda languages terminate with `।`. The client deleted its own summary-cleanup code and renders whatever the server sends.
-
-Notice that alerts get a *deliberately narrower* method. `punctuate_alert` only applies the terminator — no exclamation-point normalization, no run-collapsing. That is on purpose: an alert is authoritative government prose, and reshaping its punctuation would alter an official message. The two methods are kept structurally separate **so nobody can later "unify" them and quietly start rewriting alert text.** The separation is the feature. One exemption completes the picture: strings authored entirely in the locale files, where a translator wrote the sentence and its terminal punctuation, are already display-ready and skip the pass. The rule punctuates what the server assembles; it does not second-guess what a human already finished.
+The two methods are deliberately unequal. `punctuate_summary` does the full pass, with CJK and Thai appending nothing and the danda languages terminating with `।`, and the client deleted its own summary-cleanup code in favor of it. `punctuate_alert` only applies the terminator, with no exclamation-point normalization and no run-collapsing, because an alert is authoritative government prose and reshaping its punctuation would alter an official message. They are kept structurally separate so nobody can later unify them and quietly start rewriting alert text. One exemption completes the picture: strings authored entirely in the locale files, where a translator wrote the sentence and its terminal punctuation, are already display-ready and skip the pass. The rule punctuates what the server assembles; it does not second-guess what a human already finished.
 
 ### The Test That Catches None of This by Default
 
-Every rule above has the same failure signature: it works in English and breaks in some other language. And the default fixtures are English-only. An English summary is already terminated, upper-cased, and Latin-scripted, so a change that mangles the CJK path — or breaks alias normalization for `zh-Hant`, or drops a `_name` companion — sails through an English snapshot untouched.
+Every rule above has the same failure signature: it works in English and breaks in some other language. The default fixtures are English-only. An English summary is already terminated, upper-cased, and Latin-scripted, so a change that mangles the CJK path, breaks alias normalization for `zh-Hant`, or drops a `_name` companion sails through an English snapshot untouched.
 
-The discipline is a one-line convention with teeth: **when a change is language-dependent, assert a non-English language.**
+The discipline is a one-line convention: when a change is language-dependent, assert a non-English language.
 
 ```ruby
 require "test_helper"
@@ -184,29 +182,21 @@ class SummaryPunctuationTest < ActiveSupport::TestCase
 end
 ```
 
-Without the `ja` assertion, the no-terminator rule for CJK could regress and every test would still be green. A non-Latin language in the assertion is not thoroughness for its own sake; it is the only assertion that exercises the branch English never touches.
+Without the `ja` assertion, the no-terminator rule for CJK could regress and every test would still be green. A non-Latin language in the assertion is not thoroughness for its own sake. It is the only assertion that exercises the branch English never touches.
 
 ## Results
 
-- **One helper** pins every derived string to the request's language: no thread-global locale, no per-call-site guesswork, so a concurrently-composed response never leaks a second language.
-- **The valid-language set is one line** derived from the framework's locale registry, with single-line inclusion validation returning `400` for anything else. Adding a locale file is the whole act of adding a language.
-- **The `pt-BR` outbound-flip bug never shipped** because the invertible provider table and the inbound merge are physically separate, with the hazard written into a comment at the table.
-- **The client kept its own language list** and the team accepted no parity test, betting a small reviewed bridge is safer than a fragile cross-repo one. That bet has held.
-- **The app deleted its summary-massaging code.** Punctuation has one owner; a structurally narrower alert method keeps government prose verbatim, and clients render bytes.
+- Every derived string is pinned to the request's language through one helper. No thread-global locale, no per-call-site guesswork, so a concurrently composed response never leaks a second language.
+- Adding a locale file is the whole act of adding a language. The valid set is derived from the framework's locale registry, and inclusion validation returns `400` for anything else. The invertible provider table and the inbound merge are physically separate, and the `pt-BR` outbound flip never shipped.
+- The app deleted its summary-massaging code. Punctuation has one owner, a structurally narrower alert method keeps government prose verbatim, and clients render bytes.
+- The cost accepted: the client keeps its own language list with no parity test, on the bet that a small reviewed bridge is safer than a fragile cross-repo one. That bet has held.
 
 ## Lessons Learned
 
-- **Localize codes at the edge, not sentences in the middle.** The moment your server composes an English sentence, you have made content that cannot be translated afterward. Ship a machine code plus a localized companion, resolved at the one seam that holds the language — because the English path always looks fine, so this has to be a rule, not a judgment call.
-
-- **A missing translation is a bug, not a fallback string.** Dynamic key interpolation turns an unclassified value into "translation missing" on a customer's screen; an exhaustive `case` with a raising `else` turns the same gap into a red test. Verbose and loud beats terse and silent.
-
-- **Know the direction of every alias table.** If a table will ever be inverted, the un-inverted form must be a bijection, and your many-to-one conveniences must live in a separate layer that never gets inverted — because `Hash#invert` is last-key-wins, and the day it picks the wrong winner it changes an outbound value you weren't even looking at.
-
-- **Two lists bridged by one small table can be the right call.** There is no compiler enforcing that the client and server language lists agree, and that is survivable precisely because the bridge is centralized and reviewed with care. Don't add a fragile cross-repo test to fake a guarantee you don't have; make the bridge small enough to hold in your head.
-
-- **Own display punctuation once, and resist unifying the exceptions.** One rule, one concern, every output — but when a second rule (alerts) is deliberately narrower, keep it as its own method so nobody DRYs the difference away, because the difference is the point.
-
-- **Snapshot a non-Latin language or the drift ships silently.** English fixtures exercise no terminator suppression, no script difference, no alias normalization; a single `lang=ja` assertion is worth more than a hundred English rows for any change that touches localized output.
+- **A missing translation is a bug, not a fallback string.** An exhaustive `case` with a raising `else` turns the gap into a red test instead of "translation missing" on a customer's screen.
+- **Know the direction of every alias table.** If it will ever be inverted, the un-inverted form must be a bijection, and many-to-one conveniences live in a layer that is never inverted.
+- **Keep a deliberately narrower rule as its own method.** When one output must stay verbatim, a separate function stops someone from DRYing the difference away.
+- **Assert a non-Latin language for any change that touches localized output.** English fixtures exercise no terminator suppression, no script difference, and no alias normalization.
 
 ---
 
@@ -215,3 +205,5 @@ Without the `ja` assertion, the no-terminator rule for CJK could regress and eve
 **Prompt:** "dispatch research into web/ios about how to ios/web handles localization, including developer tooling, snapshot testing, space-constrained date formats, artifact generation for review, email tooling for support workflows with translation bugs, anything else you can find that's relevant to localization work in ios/web. I'd like an ELI5 explainer that's very brief that I can share via email … I'd also like you to dispatch research into the blog repo to make sure we're covering all of the localization related topics as individual blog posts … then agents to draft the new blog posts …"
 
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The title was shortened, the alias and punctuation sections each state their point once after the code instead of re-walking it, the bolded in-paragraph rules were unbolded, Results folds in the accepted trade-off, and Lessons Learned went from six bullets to the four the body does not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

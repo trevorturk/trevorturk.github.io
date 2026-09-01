@@ -8,9 +8,7 @@ tags: [claude, workflow, patterns]
 
 ## The Problem
 
-Claude Code is eager. Give it a task like "add authentication to my Rails app" and it will immediately start implementing something. That's great for well-defined tasks, but for decisions that require research - which gem to use, which architecture pattern, which third-party service - eagerness becomes a liability.
-
-You end up with an implementation of *a* solution before you've evaluated whether it's the *right* solution.
+Ask Claude Code to "add authentication to my Rails app" and it starts implementing Devise before anyone has asked whether Devise is the right gem. For a well-defined task, that speed is the point. For a decision that needs research, which gem, which architecture pattern, which third-party service, it means an implementation of *a* solution exists before anyone has evaluated whether it is the *right* one.
 
 ## The Insight
 
@@ -24,65 +22,55 @@ Claude's web interface and Claude Code have different strengths:
 | Phone notifications when done | Real-time interaction |
 | Non-blocking - do other work | Blocking - watching it work |
 
-The web interface excels at the "what should we do?" phase. Claude Code excels at the "now do it" phase.
+The web interface is for the "what should we do?" phase. Claude Code is for the "now do it" phase.
 
 ## The Workflow
 
 ### Step 1: Research on Claude.ai
 
-Open [claude.ai](https://claude.ai) and enable extended thinking for complex decisions. Ask research questions:
+Open [claude.ai](https://claude.ai), enable extended thinking, and ask the research question with the criteria spelled out:
 
 > "I need to add authentication to a Rails 8 app. Compare the major options (Devise, Rodauth, Clearance, roll-your-own with has_secure_password). Consider: maintenance activity, Rails 8 compatibility, flexibility, learning curve, and whether I need OAuth support later. Recommend an approach."
 
-Let it think. This takes time - that's the point. Extended thinking produces more thorough analysis than quick responses.
-
 ### Step 2: Don't Block
 
-While research runs, do other work. Claude.ai sends push notifications to your phone when the response is ready. This is async research, not a synchronous conversation.
-
-For big decisions (architecture, major dependencies, technology choices), this matters. You want comprehensive analysis, not the first answer that comes to mind.
+Go do other work. Claude.ai sends a push notification to your phone when the response is ready.
 
 ### Step 3: Review the Report
 
-The web response gives you a full analysis: pros/cons, trade-offs, recommendations with reasoning. Read it. Disagree with parts? Ask follow-up questions. Refine the recommendation until you're confident in the direction.
+The response lays out pros and cons, trade-offs, and a recommendation with reasoning. Disagree with parts? Ask follow-up questions until you are confident in the direction.
 
 ### Step 4: Request Implementation Instructions
 
-Once you've decided on an approach, ask for a handoff document:
+Once you have decided on an approach, ask for a handoff document:
 
 > "I've decided to use Rodauth. Create two things:
 > 1. A full report I can reference later (architecture decisions, why Rodauth, key configuration choices)
 > 2. A copy/paste-able markdown prompt for Claude Code with step-by-step implementation instructions. Assume Claude Code has full access to my codebase but doesn't know anything about this research conversation."
 
-The second artifact is key - it bridges the research phase to the implementation phase.
+The second item is the bridge from the research phase to the implementation phase.
 
 ### Step 5: Hand Off to Claude Code
 
-Open Claude Code in your project directory. Paste the implementation instructions. Now Claude Code does what it's good at: reading your existing code, understanding your patterns, and implementing the solution in a way that fits your codebase.
-
-The decision was made thoughtfully. The implementation is codebase-aware.
+Open Claude Code in your project directory and paste the implementation instructions. Claude Code reads your existing code, picks up your patterns, and implements the chosen approach in a way that fits.
 
 ## Why This Works
 
 ### Research Quality
 
-Extended thinking on the web produces better research than quick Claude Code responses. The model takes time to:
-- Consider multiple options
-- Weigh trade-offs systematically
-- Check for edge cases and gotchas
-- Provide nuanced recommendations
+Extended thinking spends minutes where Claude Code spends seconds. That time goes into considering several options, weighing trade-offs systematically, and checking for edge cases and gotchas before recommending anything.
 
 ### Context Separation
 
-Research doesn't need your codebase. "Which auth gem should I use?" is independent of your specific file structure. Keeping research separate prevents the model from anchoring on implementation details before the decision is made.
+"Which auth gem should I use?" does not depend on your file structure. Keeping the research away from the codebase stops the model from anchoring on implementation details before the decision is made.
 
 ### Non-Blocking Work
 
-Research takes minutes. Watching Claude think isn't productive time. Phone notifications let you context-switch to other work and come back when the analysis is ready.
+Watching a model think is not productive time. The phone notification turns a minutes-long wait into a context switch, and it lets several research threads run at once.
 
 ### Clean Handoff
 
-The implementation prompt captures the decision and reasoning. Claude Code gets clear instructions without needing to re-derive the research. Your codebase context combines with pre-researched decisions.
+The implementation prompt carries the decision and the reasoning behind it. Claude Code does not re-derive the research. It combines the decisions already made with the codebase context the web session never had.
 
 ## Example: Choosing an Authentication Gem
 
@@ -131,17 +119,19 @@ The implementation prompt captures the decision and reasoning. Claude Code gets 
 
 ## The Artifacts
 
-When requesting handoff documents, ask for two things:
+Ask for two handoff documents, because they serve different readers.
 
 ### 1. Reference Report
-Full analysis you can revisit later. Include:
+
+The full analysis, for you to revisit later. Include:
 - Options considered and why each was rejected/selected
 - Key configuration decisions and reasoning
 - Known limitations and future considerations
 - Links to documentation
 
 ### 2. Implementation Prompt
-Copy/paste instructions for Claude Code. Include:
+
+Copy/paste instructions, for Claude Code. Include:
 - Clear statement of what to implement
 - Specific technical choices already made
 - Step-by-step implementation order
@@ -149,20 +139,13 @@ Copy/paste instructions for Claude Code. Include:
 
 ## Results
 
-With this workflow:
-- Better decisions from deeper research
-- No blocking on research time
-- Clean handoff between phases
-- Implementation that fits your codebase
-- Documented reasoning for future reference
+Nothing here was measured. What changed is where the decision gets made: on Claude.ai, with the reasoning written down, before Claude Code opens a file. The cost is the wait, minutes per question instead of seconds, plus one extra prompt to produce the two handoff documents. The reference report is the lasting artifact, because the reasoning survives after the implementation is done.
 
 ## Lessons Learned
 
-- **Eagerness isn't always good** - Claude Code's speed is a liability for decisions that need thought
-- **Extended thinking matters** - Complex research benefits from the web interface's deeper analysis
-- **Async research scales** - Phone notifications let you run multiple research threads
-- **Handoff documents work** - The implementation prompt bridges research to action
-- **Context separation helps** - Research without codebase anchoring produces better options analysis
+- **Match eagerness to reversibility.** Let Claude Code dive in when undo is cheap. When undo is expensive, decide first, somewhere it cannot start typing.
+- **Write the handoff for an implementer who knows nothing about the research.** State what was chosen and why, so it does not reopen the question.
+- **Ask for the reference report in the same breath as the prompt.** The prompt is consumed once. The report is what you reread when the decision is questioned later.
 
 ---
 
@@ -171,3 +154,5 @@ With this workflow:
 **Prompt:** "I'd like another post explaining the benefits of using claude's website for research. Use Claude on the web for research and then pass the results into Claude code. Claude code is too eager. Research on the web does a much more comprehensive job. you can enable extended thinking and research on the website. you can get notifications on your phone when it's done, and not block other work. this works well for researching stuff like which rubygem to use for auth etc etc. claude code is too eager to dive in sometimes. you can also ask claude.ai to provide a full artifact/report, and also another copy/paste-able markdown report with instructions for claude code to use (in tandem with having full access to your codebase etc) to procced with implementation. create a pr off latest main."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill.
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on Claude Code implementing Devise before the gem was chosen, each reason for the workflow is stated once in Why This Works instead of again inside every step, Results says what changed and that nothing was measured, and Lessons Learned dropped the bullets that repeated section headings. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

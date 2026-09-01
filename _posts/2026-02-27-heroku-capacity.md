@@ -2,7 +2,7 @@
 layout: post
 title: "Heroku Capacity: Scaling for Traffic Spikes"
 date: 2026-02-27 13:00:00 -0600
-summary: "Dyno scaling decisions backed by data, not guesswork, with guardrails that prevent both over-provisioning and capacity crunches."
+summary: "A capture/analyze/recommend script for Heroku dynos: sample latency during the APNS spike windows, score it against guardrail thresholds, and get HOLD, SCALE_UP, or PROBE_DOWN with the evidence recorded in YAML."
 tags: [skills, scripts, heroku, scaling, performance]
 ---
 
@@ -10,13 +10,13 @@ tags: [skills, scripts, heroku, scaling, performance]
 
 Scaling dynos is easy. Knowing *when* to scale is hard.
 
-[Hello Weather](https://helloweather.com) experiences predictable traffic spikes from APNS (Apple Push Notification Service) background refreshes. Every 30 minutes, thousands of devices wake up and request fresh weather data. This creates bursty demand that can saturate dynos if we're under-provisioned.
+Every 30 minutes, thousands of devices wake up and ask [Hello Weather](https://helloweather.com) for fresh weather data. The trigger is APNS (Apple Push Notification Service) background refresh, so the burst lands at the top and bottom of every hour. Under-provision and the burst saturates the dynos. Over-provision and the idle capacity is paid for around the clock.
 
-But over-provisioning is expensive. We needed a system to answer: Is our current capacity sufficient? Should we scale up? Can we safely scale down?
+Three questions needed answers that were not guesses: Is current capacity sufficient? Should we scale up? Can we safely scale down?
 
 ## The Solution
 
-A skill/script pair for capacity operations: `bin/heroku` CLI with capture/analyze/recommend workflow.
+A `bin/heroku` script and a matching skill. The script samples Heroku metrics during a traffic window, scores them against thresholds, and recommends a formation change. The skill says which command to run and when.
 
 ### Architecture
 
@@ -29,11 +29,14 @@ bin/heroku
 └── recommend # Policy decision from data
 ```
 
-**Config files:**
+Two YAML files hold the state:
+
 - `config/heroku/guardrails.yml` - Latency, error rate, load thresholds
 - `config/heroku/formation.yml` - Current formation, bounds, history
 
 ### The Pattern: Status -> Capture -> Analyze -> Recommend
+
+A full pass is four commands:
 
 ```bash
 # 1. Check current state
@@ -53,7 +56,7 @@ bin/heroku recommend --json
 
 ### Guardrails YAML
 
-The guardrails define what "good" looks like:
+The guardrails file defines what healthy looks like, and every capture is scored against it:
 
 ```yaml
 # config/heroku/guardrails.yml
@@ -70,11 +73,9 @@ load:
   connect_time_max_ms: 100
 ```
 
-Every capture is evaluated against these thresholds.
-
 ### Formation YAML
 
-The formation tracks current state and history:
+The formation file records the current dyno counts, their bounds, and a history of every change with the captures that justified it:
 
 ```yaml
 # config/heroku/formation.yml
@@ -96,7 +97,7 @@ history:
     captures: [spike_00_20260215_0001.json]
 ```
 
-This creates an audit trail for scaling decisions.
+The history is the audit trail. The next decision starts from why the last one was made, not from memory.
 
 ### Capture Windows
 
@@ -108,17 +109,17 @@ Like CloudFront logging, capture windows align with traffic patterns:
 | `spike_00` | :00-:08 | APNS top-of-hour |
 | `spike_30` | :30-:38 | APNS mid-hour |
 
-The spike windows are critical - that's when capacity problems surface.
+The spike windows are where capacity problems surface. A `normal` capture on its own is a baseline, not a verdict.
 
 ### The One-Command Check
 
-For quick operational checks, one command does it all:
+For a quick operational read, `check` does it all:
 
 ```bash
 bin/heroku check --json
 ```
 
-This runs a capture, analyzes it, and returns a recommendation:
+It runs a capture, analyzes it, and returns a recommendation along with how many captures stand behind it:
 
 ```json
 {
@@ -140,23 +141,21 @@ The recommend command outputs one of three states:
 | `SCALE_UP` | Guardrails breached | Increase dynos |
 | `PROBE_DOWN` | Significant headroom | Consider reducing |
 
-`PROBE_DOWN` is intentionally cautious - it suggests you *might* be able to scale down, but recommends capturing more data first.
+`PROBE_DOWN` is deliberately cautious. It says you *might* be able to scale down, and asks for more captures before you do.
 
 ### Interpreting Failures
 
-Not all guardrail breaches mean "add more dynos":
+A breached guardrail does not always mean more dynos:
 
-**Upstream timeouts** - If latency spikes are caused by slow upstream providers (weather data sources), adding dynos won't help. This needs timeout tuning (see [CloudFront Logging](/cloudfront-logging/)).
-
-**Router saturation** - Look for `connect` time growth, queue-like error codes, elevated load. This *does* indicate dyno pressure.
-
-**Small samples** - Treat short capture windows as directional, not definitive.
+- **Upstream timeouts** - If latency spikes come from slow upstream providers (weather data sources), adding dynos will not help. That needs timeout tuning (see [CloudFront Logging](/cloudfront-logging/)).
+- **Router saturation** - Growing `connect` time, queue-like error codes, and elevated load *do* indicate dyno pressure.
+- **Small samples** - Treat short capture windows as directional, not definitive.
 
 ## The Workflow in Practice
 
 ### Pre-Event Scaling
 
-Before a known traffic event (app feature, press coverage):
+Before a known traffic event (an app feature, press coverage), the full pass says whether the formation holds:
 
 ```bash
 # Verify current state
@@ -175,7 +174,7 @@ bin/heroku recommend --json
 
 ### Post-Incident Analysis
 
-After users report slowness:
+After users report slowness, capture during the problem, then scale and record the change:
 
 ```bash
 # Capture during the problem
@@ -193,7 +192,7 @@ heroku ps:scale web=6 -a helloweather
 
 ### Probe Down Workflow
 
-When costs seem high:
+When costs look high, the same tools run in reverse. Reduce by one dyno and watch the next spike window before deciding:
 
 ```bash
 # Capture both windows
@@ -215,26 +214,25 @@ bin/heroku capture --window spike_00 --json
 
 ## Operational Guardrails
 
-The skill enforces careful decision-making:
+The skill holds four rules the script cannot enforce:
 
-- **Never scale from one capture** - Require multiple windows
-- **Keep formation.yml current** - Update after every change
-- **Store capture artifacts** - Reference them in PRs
-- **Use `--json` for automation** - Structured output for scripts
+- **Never scale from one capture.** Require multiple windows.
+- **Keep formation.yml current.** Update it after every change.
+- **Store capture artifacts.** Reference them in PRs.
+- **Use `--json` for automation.** Structured output is what scripts consume.
 
 ## Results
 
-- **Data-driven scaling** instead of guesswork
-- **Clear audit trail** of why we scaled
-- **Spike awareness** - We know APNS patterns affect capacity
-- **Cost savings** - Confident probe-down when appropriate
+- Every scaling change now has captures behind it and a `formation.yml` history entry naming them and the reason. The one on record, web 3 -> 4 on 2026-02-15, followed a `spike_00` capture that breached the p95 threshold.
+- The APNS pattern is encoded in the capture windows instead of known only from experience.
+- The cost is patience. A decision waits on at least two windows, and a spike capture means waiting for the next :00 or :30.
+- No dollar figure was measured for probing down. What changed is that a scale-down is a one-dyno probe with a defined rollback, not a gamble.
 
 ## Lessons Learned
 
-- **APNS creates predictable spikes** - Plan for them, don't be surprised
-- **Distinguish dyno pressure from upstream slowness** - Adding dynos doesn't fix slow sources
-- **Keep history** - Past scaling decisions inform future ones
-- **Probe down cautiously** - Better to overpay slightly than to drop requests
+- **Predictable spikes get their own capture window.** Baseline metrics never show the problem. Sample the minutes that do.
+- **Separate dyno pressure from upstream slowness before scaling.** Growing connect time and queueing point at dynos. Slow providers do not, and more dynos will not fix them.
+- **Probe down one step, with the rollback decided first.** Overpaying slightly costs less than dropped requests.
 
 ---
 
@@ -243,3 +241,5 @@ The skill enforces careful decision-making:
 **Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Source: `.claude/skills/heroku-capacity/SKILL.md`
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The opening now leads with the 30-minute APNS burst, each section says its part once, Results states what changed and what it cost and admits that savings were not measured, and Lessons Learned dropped the bullets that repeated the Operational Guardrails. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.

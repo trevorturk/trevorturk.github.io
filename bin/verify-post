@@ -5,7 +5,7 @@
 # meta section still carries the original prompts. Exit 1 on any failure.
 set -uo pipefail
 cd /Users/trevorturk/Code/trevorturk.github.io
-f="$1"; fail=0
+f="${1#/Users/trevorturk/Code/trevorturk.github.io/}"; fail=0
 extract() { awk '/^```/{f=!f; print; next} f'; }
 h2s() { awk '/^```/{f=!f; next} !f && /^## /'; }
 old="$(git show "main:$f")"
@@ -23,7 +23,7 @@ fi
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   if ! printf '%s\n' "$new" | grep -qF -- "$line"; then echo "FAIL: original prompt line missing: ${line:0:80}..."; fail=1; fi
-done < <(printf '%s\n' "$old" | grep '^\*\*Prompt')
+done < <(printf '%s\n' "$old" | grep -E '^\*\*Prompt( [0-9]+)?:\*\*')
 if ! printf '%s\n' "$new" | grep -q '^\*\*Rewrite (2026-09-01):\*\*'; then echo "FAIL: no **Rewrite (2026-09-01):** paragraph"; fail=1; fi
 # links to other posts must survive
 for link in $(printf '%s\n' "$old" | grep -o '](/[a-z0-9-]*/)' | sort -u); do
@@ -32,7 +32,7 @@ done
 # raw tags balanced
 r1=$(printf '%s\n' "$new" | grep -c '{% raw %}'); r2=$(printf '%s\n' "$new" | grep -c '{% endraw %}')
 [ "$r1" = "$r2" ] || { echo "FAIL: raw/endraw unbalanced ($r1/$r2)"; fail=1; }
-body() { awk '/^## How This Post Was Made/{exit} {print}' | awk '/^```/{f=!f; next} !f'; }
+body() { awk 'NR==1 && /^---/{fm=1; next} fm && /^---/{fm=0; next} !fm' | awk '/^## How This Post Was Made/{exit} {print}' | awk '/^```/{f=!f; next} !f'; }
 echo "body words: main $(printf '%s\n' "$old" | body | wc -w | tr -d ' ') -> now $(printf '%s\n' "$new" | body | wc -w | tr -d ' ')"
 [ $fail = 0 ] && echo "OK: $f"
 exit $fail

@@ -8,9 +8,9 @@ tags: [skills, scripts, app-store, pricing]
 
 ## The Problem
 
-App Store pricing is deceptively complex. Apple offers over 900 price tiers across 175 territories, each with its own currency, exchange rate fluctuations, and purchasing power differences. Setting prices manually in App Store Connect is tedious and error-prone. Worse, prices that look reasonable in one territory can be completely wrong for another due to local economic conditions.
+[Hello Weather](https://helloweather.com) sells 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. Across Apple's 175 territories, that is over 1,000 individual prices. Each one has to land on one of Apple's over 900 price tiers, in a territory with its own currency, exchange rate fluctuations, and purchasing power. A price that looks reasonable in one territory can be completely wrong in another, and setting that many by hand in App Store Connect is tedious and error-prone.
 
-[Hello Weather](https://helloweather.com) has 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. That's over 1,000 individual prices to manage. We needed a system that could:
+We needed a system that could:
 
 - Calculate appropriate prices based on purchasing power parity (PPP)
 - Find the nearest valid Apple price tier
@@ -20,7 +20,7 @@ App Store pricing is deceptively complex. Apple offers over 900 price tiers acro
 
 ## The Solution
 
-A skill/script pair that handles the entire pricing workflow: `bin/appstore` CLI backed by SQLite for data and YAML for configuration.
+A skill/script pair that handles the entire pricing workflow: a `bin/appstore` CLI backed by SQLite for data and YAML for configuration.
 
 ### Architecture
 
@@ -33,14 +33,15 @@ bin/appstore
 └── offer      # Manage offer code campaigns
 ```
 
-**Data storage:**
+Data lives in three places:
+
 - `db/appstore.sqlite3` - PPP ratios, exchange rates, territories, Apple price tiers
 - `config/appstore/approved_prices.yml` - Source of truth for prices
 - `config/appstore/pricing_strategy.yml` - Floor/ceiling rules, overrides
 
 ### The Pattern: Validate -> Dry-Run -> Submit -> Verify
 
-This pattern prevents mistakes by requiring multiple checkpoints:
+A price change passes several checkpoints before it reaches App Store Connect, and one after:
 
 ```bash
 # 1. Refresh external data (PPP, exchange rates, Apple tiers)
@@ -59,11 +60,13 @@ bin/appstore submit --date 2026-03-01 --verbose
 bin/appstore verify --date 2026-03-01 --verbose
 ```
 
+The `--dry-run` flag has caught many mistakes before they hit App Store Connect. The `--date` flag is required because subscription price changes must be scheduled for a future date. IAPs can change immediately. The final `verify` step reads the effective prices back and compares them to the approved ones, because App Store Connect can silently fail.
+
 ## Implementation
 
 ### PPP-Based Pricing
 
-Purchasing Power Parity adjusts prices based on local economic conditions. A $20/year subscription might be affordable in the US but expensive in Vietnam. PPP helps find the right local price.
+A $20/year subscription might be affordable in the US but expensive in Vietnam. Purchasing power parity adjusts the base price for local economic conditions:
 
 ```ruby
 target_percent = clamp(ppp_ratio, floor, ceiling)  # 69% - 120%
@@ -75,7 +78,7 @@ The floor (69%) ensures accessibility in lower-income markets. The ceiling (120%
 
 ### Coherence Rules
 
-Individual prices aren't enough - the whole ladder must make sense:
+Individual prices aren't enough. The whole ladder must make sense:
 
 | Rule | Requirement | Why |
 |------|-------------|-----|
@@ -94,7 +97,7 @@ Prices should look intentional, not algorithmic:
 
 ### Quarterly Review Workflow
 
-Claude reads the data files and computes recommendations:
+Territories with identical pricing are reviewed as a group, which cuts 175 territories to ~30-40 groups. Claude reads the data files and computes a recommendation for each:
 
 ```
 Progress: 12 / 36 complete, 24 remaining
@@ -113,7 +116,7 @@ Options:
 3. Custom adjustment
 ```
 
-After each approval, Claude immediately edits `approved_prices.yml` - never batching changes.
+After each approval, Claude immediately edits `approved_prices.yml`, never batching changes.
 
 ### Offer Codes
 
@@ -131,7 +134,7 @@ bin/appstore offer codes one-time CAMPAIGN_KEY --count 100 --expires 2026-04-01
 bin/appstore offer codes custom CAMPAIGN_KEY --code SPRINGDEAL --limit 500
 ```
 
-Offer prices are computed from `approved_prices.yml` at runtime - no duplicate price files.
+Offer prices are computed from `approved_prices.yml` at runtime, so there are no duplicate price files.
 
 ## Results
 
@@ -142,11 +145,9 @@ Offer prices are computed from `approved_prices.yml` at runtime - no duplicate p
 
 ## Lessons Learned
 
-- **SQLite over YAML for data** - Our first version stored everything in YAML. Context windows exploded. Moving to SQLite with ActiveRecord models let us query only what we need.
-- **Dry-run everything** - The `--dry-run` flag on submit has caught many mistakes before they hit App Store Connect.
-- **Verify after submit** - App Store Connect can silently fail. Always verify that effective prices match approved prices.
-- **Group similar territories** - Reviewing 175 territories individually is insane. Grouping by identical pricing cuts reviews to ~30-40 groups.
-- **Future dates for subscriptions** - Subscriptions require scheduling price changes for a future date. IAPs can change immediately.
+- **SQLite over YAML for data.** Our first version stored everything in YAML, and context windows exploded. SQLite with ActiveRecord models lets us query only what we need.
+- **Group identical rows before asking a human to review.** ~30-40 groups get reviewed in one sitting. 175 rows do not.
+- **A submit is not done until it is read back.** The remote can silently fail. Compare effective values to the source of truth after every write.
 
 ---
 
@@ -155,3 +156,5 @@ Offer prices are computed from `approved_prices.yml` at runtime - no duplicate p
 **Prompt:** "Write 7+ in-depth blog posts documenting real engineering patterns from helloweather/web. These posts go deeper than the existing 'Skills and Scripts' overview, showing specific implementations."
 
 Generated by Claude (Opus 4.5) using the blog-post-generator skill. Source: `.claude/skills/appstore-pricing/SKILL.md`
+
+**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the six products and thousand-plus prices instead of a general remark about App Store pricing, the facts about dry runs, silent failures, future-dated subscription changes, and territory grouping moved from Lessons Learned into the sections they belong to, and Lessons Learned kept the three rules that transfer. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
