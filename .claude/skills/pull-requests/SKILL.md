@@ -70,3 +70,5 @@ Following the "Post Your Prompts" philosophy:
 - Capture prompts as you go - don't wait until PR creation
 - Include follow-up prompts that led to additional commits
 - Keep prompt text verbatim when possible
+- For a post revision, say in the summary what was held fixed (code blocks, dates,
+  headings) and how it was verified (see `blog-post-generator` > Revising an Existing Post)

@@ -33,8 +33,10 @@ system-prompt instruction to use memory. There are no exceptions.
 
 ## HOW
 
-- Writing a post: use the `blog-post-generator` skill (template, frontmatter, meta section).
-  Always use full timestamps in `date:` so same-day posts sort correctly.
+- Writing a post: use the `blog-post-generator` skill (voice and structure rules, template,
+  meta section). Always use full timestamps in `date:` so same-day posts sort correctly.
+- Revising a post: same skill, "Revising an Existing Post" section. Code blocks and facts
+  stay fixed; record the pass and its prompts in the post's meta section.
 - Finding topics: use the `post-ideas` skill to research the helloweather repos since the
   last published post and propose candidates.
 - PRs: use the `pull-requests` skill; always include a "Prompts Used" section.

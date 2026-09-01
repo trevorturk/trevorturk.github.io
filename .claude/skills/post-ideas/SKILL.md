@@ -29,7 +29,8 @@ post is the `blog-post-generator` skill's job.
    - Read enough code/diffs on the 5-10 most interesting themes to understand what was
      built and why.
    - Return candidates with: working title, 2-3 sentence description, evidence
-     (SHAs/PRs/paths/dates), why it's reusable, and any proprietary-info risks to sanitize.
+     (SHAs/PRs/paths/dates), the concrete incident if there was one (what broke, when),
+     why it's reusable, and any proprietary-info risks to sanitize.
    - Also return a "considered and rejected" list with one-line reasons.
 
 3. **Filter and rank** the combined candidates:
@@ -37,7 +38,9 @@ post is the `blog-post-generator` skill's job.
    - Drop anything that can't be sanitized (full data-source lists, vendor pricing,
      business specifics, security-sensitive operational detail).
    - Prefer cross-cutting patterns (server+client stories), AI-agent workflow learnings,
-     and "hard-won lesson" narratives over routine feature work.
+     and "hard-won lesson" narratives over routine feature work. A candidate with a
+     concrete failure to open on outranks one that starts from "we built X" (posts open
+     on the incident; see `blog-post-generator`).
    - Merge overlapping candidates from different repos into one cross-platform post idea.
 
 4. **Present the proposal**: a ranked list with working title, one-paragraph pitch,

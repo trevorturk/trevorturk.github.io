@@ -23,7 +23,7 @@ Posts go in `_posts/` with the naming convention `YYYY-MM-DD-title.md`. Each pos
 ---
 layout: post
 title: "Your Title"
-date: YYYY-MM-DD
+date: YYYY-MM-DD HH:MM:SS -0600
 summary: "A brief summary for the index page."
 tags: [tag1, tag2]
 ---
