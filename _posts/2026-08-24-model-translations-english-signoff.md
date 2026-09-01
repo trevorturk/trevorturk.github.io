@@ -8,7 +8,7 @@ tags: [localization, ai-agents, workflow]
 
 ## The Problem
 
-A key like `feels_like_short` with no Vietnamese value does not render in English. It renders as `feels_like_short`. We verified this on a device: Apple's String Catalog has no key-level fallback, so a missing language row shows the raw internal key as literal broken text. Most localization stacks fall back to the source language, which makes an incomplete translation a cosmetic gap. Here it is a broken screen in production. We learned this the expensive way with a half-filled Portuguese variant, a story of its own.
+A String Catalog key is its English source string. A key with no Vietnamese row does not fall back to the shipped English value. It renders the raw key. For a plain label that is English text in the middle of a Vietnamese screen. For a key whose shipped English differs from the key, an override row or a plural form, it is the key itself: the `%lld minutes` incident put "Rising in 1 minutes." on screen. We verified this on a device: Apple's String Catalog has no key-level fallback, so a missing language row shows whatever the key says. Most localization stacks fall back to the source language, which makes an incomplete translation a cosmetic gap. Here it is a broken screen in production. We learned this the expensive way with a half-filled Portuguese variant, a story of its own.
 
 That one fact makes translation all-or-nothing, per key, at ship time. Add a button in English and translate it next sprint, and for a sprint the button is broken in 26 languages. [Hello Weather](https://helloweather.com) has more surface for this than most apps: descriptive stat cards, radar legends, labeled chart rails, watch and widget labels, hundreds of lines of settings. All of it is maintained by one person with no translation agency, with a language model doing the translating. So the rule is blunt:
 
@@ -26,7 +26,7 @@ The rule is enforced by a PR checklist. Everything else in the workflow exists t
 
 ### The gate: same-PR fill, fast-tracked but never unattended
 
-A feature with English-only keys passes review in an English simulator, merges, and renders raw keys the next time a non-English user opens that screen. Nothing in the build catches it. So the rule is written twice: an architecture invariant lists it as never-violate, and a pull-request checklist runs before every push. The order of the checklist items matters:
+A feature with English-only keys passes review in an English simulator, merges, and renders raw keys the next time a non-English user opens that screen. Nothing in the build catches it. So the rule is written twice: an architecture invariant lists it as never-violate, and a pull-request checklist runs before every push. Condensed here, and in an order that matters:
 
 ```markdown
 ### Localization gate (every PR that touches user-visible copy)
@@ -55,7 +55,7 @@ So the sequence is fixed: draft English, sign off English, fan out the fills. Th
 
 The catalog is a 6 MB JSON file that Xcode owns and rewrites, with its own serialization style, key order (Xcode's `localizedStandardCompare` sort), and escaping rules. The obvious bulk edit, `json.load`, mutate, `json.dump`, re-serializes the whole file in the script's style. A forty-value change becomes a diff touching thousands of lines, and an escaped placeholder can be silently mangled on the way through.
 
-So a handful of strings are edited one at a time with exact anchored replacements, and a bulk fill goes through a validated-replacement pipeline with one invariant: never mutate the real file speculatively. Simulate in memory, prove it correct, then write, and require the bytes on disk to equal the validated copy.
+So a handful of strings are edited one at a time with exact anchored replacements, and a bulk fill goes through a validated-replacement pipeline with one invariant: never mutate the real file speculatively. Simulate in memory, prove it correct, then write, and require the bytes on disk to equal the validated copy. The pipeline is a procedure the localization skill specifies, not a checked-in script; condensed into one, it looks like this.
 
 ```python
 """Apply bulk String Catalog fills without letting an unowned serializer
@@ -127,7 +127,7 @@ import re
 from collections import Counter
 
 _SPECIFIER = re.compile(
-    r"%(?:\d+\$)?[#0\- +']*\d*(?:\.\d+)?(?:hh|h|ll|l|q|L|z|t|j)?[@dioux XeEfgGaAcsp%]"
+    r"%(?:\d+\$)?[#0\- +']*\d*(?:\.\d+)?(?:hh|h|ll|l|q|L|z|t|j)?[@diouxXeEfgGaAcsp%]"
 )
 
 
@@ -161,19 +161,19 @@ The QA was calibrated on German first, over 1,092 rows, before running across th
 
 ### The pilot: one language, a paid editor, every row adjudicated
 
-The plan had been to send the whole catalog to a paid post-editing vendor. Whether that spend bought quality was a question we refused to answer by assumption, so we ran a pilot: one language, one paid editor, and a hard rule on the way back. Every changed row would be adjudicated against the shipped value and accepted or rejected with a written reason. Editors are not automatically right, and an acceptance needs an argument as much as a rejection does.
+The plan had been to send the human-reviewable core of the catalog, all 26 languages, to a paid post-editing vendor. Whether that spend bought quality was a question we refused to answer by assumption, so we ran a pilot: one language, one paid editor, and a hard rule on the way back. Every changed row would be adjudicated against the shipped value and accepted or rejected with a written reason. Editors are not automatically right, and an acceptance needs an argument as much as a rejection does.
 
-The editor changed 172 of 897 rows. The genuine wins: two morphological errors the model had made (a wrong compound form, a wrong participle), the correct barometric-trend convention, and platform typography niceties like the proper trailing-ellipsis style. The same 172 changes also introduced new errors: a wrong term for watch complications (a P0, twice), a wrong moon-phase name, two wrong pollen nouns, a brand name that must never be translated, and drift from the platform's official OS terminology. Counted honestly, the editor introduced more errors than they found. The edit was net-negative.
+The editor changed 172 of 897 rows. The genuine wins: two morphological errors the model had made (a wrong adjective ending, a wrong participle), the correct barometric-trend convention, and platform typography niceties like the proper trailing-ellipsis style. The same 172 changes also introduced new errors: a wrong term for watch complications (a P0, twice), a wrong moon-phase name, two wrong pollen nouns, a brand name that must never be translated, and drift from the platform's official OS terminology. Counted honestly, the editor introduced more errors than they found. The edit was net-negative.
 
 The verdict is not that the vendor was bad. It is that we only knew the edit was net-negative because we adjudicated every changed row. Imported wholesale on trust, the normal way to consume a vendor deliverable, it would have lowered quality while feeling like an upgrade. The gate produced the signal, not the editor's credentials, and the record that made it visible is a table, one row per change:
 
 ```markdown
 | Key / surface            | Editor's change            | Verdict | Reason                                         |
 |--------------------------|----------------------------|---------|------------------------------------------------|
-| `sunrise` (stat card)    | Aufgang → Sonnenaufgang    | accept  | matches the OS-term glossary                   |
+| `STEADY` (pressure trend) | → „BESTÄNDIG"             | accept  | barometer convention                           |
 | `…` (trailing ellipsis)  | `...` → `…`                | accept  | platform typography convention                 |
 | complication label       | → „Probleme"               | reject  | wrong sense for a watch complication (P0)      |
-| `Skies` (icon-set name)  | Skies → Himmel             | reject  | brand / icon-set name, never translated        |
+| `Skies` (icon-set name)  | Skies → a German noun      | reject  | brand / icon-set name, never translated        |
 ```
 
 Then we measured the model's own baseline against the same rows: roughly a 0.3% hard-error rate over 897 rows, already launch quality. The remaining paid orders were cancelled and paid post-editing retired. The scope file prepared to drive the vendor work now aims the model's own QA passes instead.
@@ -184,7 +184,7 @@ Register calls, review verdicts, and the adjudication of any external edit stay 
 
 ## Results
 
-- 27 languages shipped with same-day store approval, and the catalog ships complete in every language or a test stops the PR.
+- 27 languages shipped with same-day store approval, and a test fails the PR on any key that is translated in some languages but not all 26.
 - Paid post-editing was retired on evidence: the pilot put the model plus gates at roughly a 0.3% hard-error rate, and the vendor scope was repurposed to aim the model's own QA.
 - A forty-value catalog fill is now a forty-value diff, with a byte-identity guarantee that the reviewed file is the shipped file.
 - The cost: every PR that touches copy carries 26 fills, catalog-only PRs still wait for a human to merge, and tier 2 long-form text gets model review only.
@@ -206,3 +206,5 @@ Register calls, review verdicts, and the adjudication of any external edit stay 
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the raw key rendering on a device instead of on how much text the app carries, the title is one clause, each mechanism section gives its reason once, Results is what changed and what it cost, and Lessons Learned dropped the bullet that repeated a section heading. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The opening example was corrected: catalog keys are English source strings, not identifiers like `feels_like_short`, so a missing row renders the English key text (and a raw plural key rendered "Rising in 1 minutes." on a device); the two Python blocks are now labeled as a condensation of the procedure the localization skill specifies rather than a checked-in script, and a stray space in the specifier regex's character class was removed; the pilot's scope is now the human-reviewable core rather than the whole catalog, the two model grammar errors are an adjective ending and a participle, the adjudication table's accepted example is the documented „BESTÄNDIG" barometer convention (the earlier Aufgang → Sonnenaufgang row ran the wrong direction: the same PR shortened Sunrise to „Aufgang"), and the completeness result now matches the test, which fails a PR on any partially translated key.

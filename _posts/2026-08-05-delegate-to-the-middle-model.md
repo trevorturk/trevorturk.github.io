@@ -20,7 +20,7 @@ So we inverted the rule. The best model stays in the session, where judgment liv
 
 All three repos now carry `.claude/agents/opus-4-8.md`, a Claude Code subagent definition pinning `model: claude-opus-4-8` with `effort: medium`. It is the preferred target for dispatched implementation work, and the frontmatter description states the reasoning where every future session will read it:
 
-> The preferred tier for dispatched implementation work — the top tier tends to over-engineer; this pin plus bounded effort biases toward simpler, brief-faithful output. Use for clean-room implementations, mechanical refactors, and bounded PR work.
+> The preferred tier for dispatched implementation work — Opus 5 tends to over-engineer; this pin plus bounded effort biases toward simpler, brief-faithful output. Use for clean-room implementations, mechanical refactors, and bounded PR work.
 
 The body of the agent file is a "least machinery" contract, short enough to quote nearly whole (lightly sanitized):
 
@@ -47,23 +47,23 @@ Read-only briefs are first-class. The same pinned agent runs audits and verifica
 
 ## The Routing Matrix: By Kind of Work, Not by Price List
 
-The pin only makes sense inside a policy for *what goes where*. The AGENTS.md model-selection rule in each repo now encodes a three-way split, and the axis is the kind of work, not cost:
+The pin only makes sense inside a policy for *what goes where*. The model-selection rule in each repo (in AGENTS.md when this shipped; since 2026-08-13 in CLAUDE.md, when agent setup went tool-agnostic and AGENTS.md kept only the never-delegate-judgment line) encodes a three-way split, and the axis is the kind of work, not cost:
 
 | Kind of work | Where it runs |
 |---|---|
 | **Judgment**: planning, architecture, design decisions, ambiguous debugging, review *verdicts*, judgment-heavy reviewer lenses (fresh-eyes reads, devil's advocate) | The frontier session model — never delegated |
-| **Bounded execution**: implementation briefs with verified scope, mechanical reviewer lenses (claims audits, cross-reference checks), clean-room applies, read-only verification passes | The pinned Opus 4.8 agent, `effort: medium` |
+| **Bounded execution**: well-specified implementation briefs, mechanical reviewer lenses (claims audits, cross-reference checks), clean-room applies, read-only verification passes | The pinned Opus 4.8 agent, `effort: medium` |
 | **Bulk mechanics**: wide searches, boilerplate edits, doc fetching | The cheapest capable tier (Sonnet, via the model override) |
 
 The line that does the most work is the split *within review*. Our [adversarial review rounds](/adversarial-review-rounds/) post already argued that reviewer briefs are delegable and the verdict is not. This matrix sharpens it: reviewer lenses themselves divide by kind. A claims audit ("verify every factual assertion in this PR body against the code") is bounded execution, and the literal-minded mid-tier is arguably *better* at it than a frontier model, because literalism is the job. A devil's-advocate lens ("argue this decision is wrong") is judgment, and stays on the session model. Same activity, opposite routing, because the underlying kind of work differs.
 
-The rule states the corollary outright: never delegate judgment-heavy work to a lesser model to save time. The matrix is not a budget ladder you slide down under pressure. Each row goes where it goes.
+The rule states the corollary outright: never delegate judgment-heavy work to a lesser model; keep it in the primary session on the most capable model available. The matrix is not a budget ladder you slide down under pressure. Each row goes where it goes.
 
 One nuance breaks the tidy "older models are humbler" story. The same writeups that flagged the newest tier as a scope-expander flagged an *adjacent, slightly older* version the same way. Opus 4.8 at medium effort was a specific pick, not "anything older than the flagship." If you adopt this pattern, the pin is a hypothesis about one model at one effort setting. Validate it on your own briefs.
 
 ## Wrinkles We Hit (and Kept)
 
-The pin activates next session, not this one. Claude Code loads the agent registry at session start, so the session that *writes* `.claude/agents/opus-4-8.md` cannot dispatch to it. The plan doc for the program that shipped this records the workaround as policy: the first dispatch in the next session doubles as the model-ID existence probe. We had documentation that `claude-opus-4-8` was a valid model ID, but we hadn't run it. Whether the harness honors `effort` from agent frontmatter isn't observable from the file at all, so that too was validated behaviorally: dispatch, and watch whether the output looks like medium-effort work. If you pin a model tier in config, plan for the first use to be a probe, and have a fallback ID in mind if the primary doesn't exist.
+The pin activates next session, not this one. Claude Code loads the agent registry at session start, so the session that *writes* `.claude/agents/opus-4-8.md` cannot dispatch to it. The plan doc written in the same session records the workaround as policy: the first dispatch in the next session doubles as the model-ID existence probe. We had documentation that `claude-opus-4-8` was a valid model ID, but we hadn't run it. Whether the harness honors `effort` from agent frontmatter isn't observable from the file at all, so that too was validated behaviorally: dispatch, and watch whether the output looks like medium-effort work. If you pin a model tier in config, plan for the first use to be a probe, and have a fallback ID in mind if the primary doesn't exist.
 
 We shipped a second pin, then deleted it. An earlier revision also pinned a step-down model as a cheaper fallback tier between the mid-tier and Sonnet. It was dropped for simplicity before the ports. Two pinned agents means every dispatch decision has one more branch, and we had no evidence the middle-middle tier earned its slot. One pin, one override, one session model: three destinations is already enough matrix.
 
@@ -75,7 +75,7 @@ The policy text ate its own dogfood. The iOS PR that introduced all this (#1468)
 
 Early, but the follow-through evidence points the right way. The first real workload after the pin activated was an iOS performance PR (#1474), applying banked loop-invariant hoists to two widget views. The QA section of the merged PR reads, in part:
 
-> Opus 4.8 mini-review (correctness / side-effects, read-only): **PASS**, zero findings; one completeness nit (empty `hourlyData` now evaluates the three hoisted getters once instead of zero times — safe defaults, unreachable via the fallback path) and a note that the `legendType` hoist is safe because the widget `Entry` viewModel is immutable per view instance.
+> Opus 4.8 mini-review (correctness / side-effects, read-only): **PASS**, zero findings; one completeness nit (empty `hourlyData` now evaluates the three hoisted getters once instead of zero times — safe defaults, unreachable via the `Fallback.hourlyData` path) and a note that the `legendType` hoist is safe because the widget `Entry` viewModel is immutable per view instance.
 
 That is the shape we wanted from the mechanical-lens row of the matrix. A read-only verification pass stayed read-only, returned a clean verdict without inventing work to justify itself, and still surfaced one useful nit with the reasoning attached. No scope expansion, no "while I was in there." The session model adjudicated the nit (accepted as harmless) and merged.
 
@@ -100,3 +100,5 @@ One data point is one data point. But the failure mode this replaced, delegated 
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the over-engineered diff instead of the rule that produced it, the bold paragraph lead-ins are plain sentences, and Lessons Learned went from nine bullets to five. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The agent-file description quote now reads "Opus 5 tends to over-engineer" as the source does, and the PR #1474 quote names the `Fallback.hourlyData` path. The routing rule is now attributed to CLAUDE.md as well as AGENTS.md (it moved there on 2026-08-13), its corollary is quoted without the "to save time" clause the source never had, the bounded-execution row says "well-specified" to match the rule, and the session-start workaround is attributed to the plan doc written in the same session rather than to a plan for the pin itself.

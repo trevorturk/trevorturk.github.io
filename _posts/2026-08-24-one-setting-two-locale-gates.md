@@ -38,13 +38,13 @@ enum Language: String, CaseIterable, Identifiable {
 }
 ```
 
-Twenty-seven cases, string-backed so the raw value doubles as the locale identifier and the persisted value. The two Chinese cases carry explicit raw values because their identifiers are not bare language codes. In the app each case also carries a `displayName` autonym ("Deutsch", "日本語", "简体中文"), so the picker shows every language in its own script, which is what a user scanning the list looks for.
+Twenty-seven cases, string-backed so the raw value doubles as the locale identifier and the persisted value. The two Chinese cases carry explicit raw values because their identifiers are not bare language codes. In the app each case also carries a `displayName` autonym ("Deutsch", "日本語", "简体中文"). The picker lists each language by its name in the current app language, with the autonym as a subtitle, so a user scanning the list can find their own script.
 
 The default is deliberately conservative. The app soft-launched, so its output stays English until a user opts in:
 
 ```swift
 func languageDefault() -> String {
-    // Detect the device locale and map it here to auto-adopt on first launch.
+    // TODO: detect the device locale and return the matching Language, if supported.
     return Language.en.rawValue
 }
 ```
@@ -58,21 +58,33 @@ SwiftUI localizes `Text("...")` literals through the `locale` in the environment
 ```swift
 import SwiftUI
 
-@MainActor
+// An app-group suite, so the widget and watch processes read the same value.
+let sharedStore = UserDefaults(suiteName: "group.example.weather")!
+
 final class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
-    @Published var language = UserDefaults.standard.string(forKey: "language") ?? "en"
-    var languageLocale: Locale { Locale(identifier: language) }
+
+    var language: String {
+        get { sharedStore.string(forKey: "language") ?? languageDefault() }
+        set {
+            sharedStore.set(newValue, forKey: "language")
+            objectWillChange.send()
+        }
+    }
+
+    var languageLocale: Locale {
+        Language(rawValue: language)?.locale ?? Locale(identifier: "en")
+    }
 }
 
 @main
 struct WeatherApp: App {
-    @ObservedObject private var settings = SettingsManager.shared
+    @ObservedObject private var settingsManager = SettingsManager.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(\.locale, settings.languageLocale)
+                .environment(\.locale, settingsManager.languageLocale)
         }
     }
 }
@@ -84,17 +96,21 @@ The widget lives in its own target and starts cold, so it re-pins the same local
 import SwiftUI
 import WidgetKit
 
-struct CurrentConditionsWidget: Widget {
+struct SmallCurrentWidget: Widget {
+    let kind = "SmallCurrent"
+
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "current", provider: Provider()) { entry in
-            WidgetEntryView(entry: entry)
+        AppIntentConfiguration(kind: kind, intent: Configuration.self, provider: Provider()) { entry in
+            SmallCurrentView(configuration: entry.configuration, viewModel: entry)
                 .environment(\.locale, SettingsManager.shared.languageLocale)
         }
+        .configurationDisplayName("Small Current")
+        .supportedFamilies([.systemSmall])
     }
 }
 ```
 
-The pin appears once in each block and reads from the same `SettingsManager.shared`. Our repo has roughly 35 of them: the app root, every widget entry view, the watch root, and each complication view. That repetition looks like a smell until you see what it prevents. A widget that forgets the pin renders in the device language, and it looks correct in a simulator running in English, so the bug ships. The pins are the seam where the multi-process reality of an iOS app meets the one-setting intent.
+The pin appears once in each block and reads from the same `SettingsManager.shared`. Our repo has 35 of them: the app root, every widget entry view, the watch root, and each complication view. That repetition looks like a smell until you see what it prevents. A widget that forgets the pin renders in the device language, and it looks correct in a simulator running in English, so the bug ships. The pins are the seam where the multi-process reality of an iOS app meets the one-setting intent.
 
 ### Gate Two: the `localized(_:)` Helper for String-Typed Copy
 
@@ -102,12 +118,13 @@ Views are only half the strings. Notifications, accessibility labels, dictionary
 
 ```swift
 private let languageLocales: [String: Locale] = Dictionary(
-    uniqueKeysWithValues: Language.allCases.map { ($0.rawValue, $0.locale) }
+    uniqueKeysWithValues: Language.allCases.map { ($0.rawValue, Locale(identifier: $0.rawValue)) }
 )
 
+// Resolves in the app language, not the device language.
 func localized(_ resource: LocalizedStringResource) -> String {
     var resource = resource
-    let language = UserDefaults.standard.string(forKey: "language") ?? Language.en.rawValue
+    let language = sharedStore.string(forKey: "language") ?? Language.en.rawValue
     resource.locale = languageLocales[language] ?? Locale(identifier: language)
     return String(localized: resource)
 }
@@ -117,7 +134,7 @@ Two choices carry it. First, the parameter is a `LocalizedStringResource`, not a
 
 At the call site it is unremarkable: `localized("Ranges")`, or `localized("\(minutes) minutes")` to interpolate into a plural key. Every `String`-typed piece of user-facing copy goes through it. Between the environment pins for `Text` and this helper for `String`, there is no third path, and neither path can reach the device language.
 
-Each property of the design maps to a rejected lever. Switching is live because the environment locale is read on every render and the helper reads the setting on every call. Change the setting and the next render is in the new language, which `AppleLanguages` cannot do while it is cached until restart. There is no fight with iOS because we never touch `AppleLanguages`, so the app's language and the system's per-app row never clobber each other. The limit is that the per-app language row iOS shows for the app in Settings is visible but inert. A user who changes it there sees nothing happen. Anyone copying this pattern should decide whether to explain that in-app.
+Each property of the design maps to a rejected lever. Switching is live because the environment locale is read on every render and the helper reads the setting on every call. Change the setting and the next render is in the new language, which `AppleLanguages` cannot do while it is cached until restart. There is no fight with iOS because we never touch `AppleLanguages`, so the app's language and the system's per-app row never clobber each other. The limit is that the per-app language row iOS shows for the app in Settings is visible but inert, because nothing consults `Bundle.main`'s language. A user who changes it there sees nothing happen. Anyone copying this pattern should decide whether to explain that in-app.
 
 ## The String Catalog Fact That Bites Hardest
 
@@ -128,39 +145,45 @@ That makes the catalog all-or-nothing. A key is either fully translated across e
 ```swift
 import Testing
 import Foundation
-
-struct StringCatalog: Decodable {
-    struct Entry: Decodable { let localizations: [String: Localization]? }
-    struct Localization: Decodable {}   // presence is all we check
-    let strings: [String: Entry]
-}
+@testable import HelloWeather
 
 @Suite("String catalog completeness")
-struct StringCatalogTests {
-    static let required: Set<String> = [
-        "cs", "da", "de", "el", "es", "fi", "fr", "hi", "hu", "id", "it",
-        "ja", "ko", "nb", "nl", "pl", "pt", "ro", "ru", "sv", "th", "tr",
-        "uk", "vi", "zh-Hans", "zh-Hant",
-    ]
+struct XcstringsCompletenessTests {
+    // Every Language case except the source language.
+    private static let requiredLanguages = Set(
+        Language.allCases.map(\.rawValue)
+    ).subtracting(["en"])
 
-    @Test("Every key is fully translated or fully untranslated")
-    func keysAreAllOrNothing() throws {
+    // Key -> the set of language codes that have a row. Values are discarded.
+    private func loadCatalog(_ name: String) throws -> [String: Set<String>] {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("Localizable.xcstrings")
-        let catalog = try JSONDecoder().decode(StringCatalog.self, from: Data(contentsOf: url))
+            .deletingLastPathComponent()
+            .appendingPathComponent("HelloWeather/HelloWeather/Resources/\(name).xcstrings")
+        let data = try Data(contentsOf: url)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let strings = try #require(json["strings"] as? [String: Any])
 
-        for (key, entry) in catalog.strings {
-            let present = entry.localizations.map { Set($0.keys) } ?? []
-            let missing = Self.required.subtracting(present)
-            #expect(missing.isEmpty || missing == Self.required,
+        return strings.mapValues { entry in
+            let localizations = (entry as? [String: Any])?["localizations"] as? [String: Any] ?? [:]
+            return Set(localizations.keys)
+        }
+    }
+
+    @Test("Localizable keys are fully translated or fully untranslated")
+    func localizableKeysAreAllOrNothing() throws {
+        let catalog = try loadCatalog("Localizable")
+
+        for (key, languages) in catalog {
+            let missing = Self.requiredLanguages.subtracting(languages)
+            #expect(missing.isEmpty || missing == Self.requiredLanguages,
                     "\"\(key)\" is partially translated; missing: \(missing.sorted())")
         }
     }
 }
 ```
 
-A key must appear in all 26 non-English languages or in none of them. The "none" case is intentionally deferred, flag-gated copy. Any partial row set fails. The `Localization` shape is empty on purpose: the test only asks which languages are *present*, not what they say, so the decoder walks the JSON and stops.
+A key must appear in all 26 non-English languages or in none of them. The "none" case is intentionally deferred, flag-gated copy. Any partial row set fails. The required set is the `Language` enum minus `en`, so adding a language to the enum adds it to the test. The loader keeps only the set of language codes under each key and drops the values: the test asks which languages are *present*, not what they say.
 
 ## The Build Prunes Keys It Cannot See
 
@@ -176,26 +199,32 @@ git diff -- HelloWeather/HelloWeather/Resources/Localizable.xcstrings \
 A non-zero count means translated values are being deleted. The fix is to restore the file, not commit it. Second, a sentinel test pins the handful of easily-pruned keys so a regression fails loudly instead of shipping:
 
 ```swift
-@Test("Fragile keys survive catalog regeneration")
+@Test("Keys with few referents stay translated across catalog regeneration")
 func sentinelKeysStayTranslated() throws {
-    let catalog = try JSONDecoder()
-        .decode(StringCatalog.self, from: Data(contentsOf: catalogURL))
+    let catalog = try loadCatalog("Localizable")
 
-    for key in ["1 min", "5 min", "Rename", "Custom Name"] {
-        let entry = try #require(catalog.strings[key], "\"\(key)\" pruned from the catalog")
-        let present = entry.localizations.map { Set($0.keys) } ?? []
-        #expect(StringCatalogTests.required.subtracting(present).isEmpty)
+    let sentinels = [
+        "1 min", "5 min",
+        "Rename", "Custom Name", "Favorite", "Unfavorite",
+        "Customize locations",
+        "Tap a location's name to rename it, or tap a star to fave. Drag to reorder.",
+        "Reset Locations Tip",
+    ]
+
+    for key in sentinels {
+        let languages = try #require(catalog[key], "\"\(key)\" pruned from the catalog")
+        #expect(Self.requiredLanguages.subtracting(languages).isEmpty)
     }
 }
 ```
 
-The keys listed are the ones that prune easily. The test fails if any of them is absent from the catalog or has lost a language.
+The keys listed have few referents in code, which is what makes them prune easily. The test fails if any of them is absent from the catalog or has lost a language.
 
 ## Results
 
 - One source of truth: a 27-case enum persisted as a single shared-storage string, defaulting to English so the soft launch shipped in English until users opted in.
-- Roughly 35 environment-locale pins across the app root, every widget entry view, the watch root, and its complications. That is the cost of localizing four separate processes instead of one.
-- Live switching with no relaunch and no interaction with `AppleLanguages`. The accepted downside is that the iOS per-app language row for the app is inert, which generates support questions.
+- 35 environment-locale pins across the app root, every widget entry view, the watch root, and its complications. That is the cost of localizing four separate processes instead of one.
+- Live switching with no relaunch and no interaction with `AppleLanguages`. The accepted downside is that the iOS per-app language row for the app is inert, which the localization plan flags as a support-confusion risk.
 - Completeness is held by test, not discipline: keys are all-or-nothing across 26 languages, and a sentinel test plus a diff gate catch build-time pruning before a commit.
 
 ## Lessons Learned
@@ -214,3 +243,5 @@ The keys listed are the ones that prune easily. The test fails if any of them is
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the user requirement instead of the product, the "Why This Beats the Alternatives" subsection is folded into the second gate as its limit, Results is trimmed to the cost and the accepted downside, and Lessons Learned is cut from seven bullets to four. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The settings and helper excerpts now read the language from an app-group `UserDefaults` suite instead of `UserDefaults.standard` (the real store is shared so widgets and the watch can read it), `language` is a computed property over that store whose setter publishes, and the widget uses `AppIntentConfiguration` rather than `StaticConfiguration`. The two catalog tests were rewritten to match the real file: `JSONSerialization` instead of `Decodable` structs, a required-language set derived from the `Language` enum minus `en`, the real test names, the real catalog path, and the full nine-key sentinel list. The picker description now says names are shown in the app language with the autonym as a subtitle, the pin count is stated as 35 exactly, and "generates support questions" was softened to the plan's own wording, a support-confusion risk.

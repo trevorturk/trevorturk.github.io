@@ -16,7 +16,7 @@ That is a per-day, per-location astronomical calculation on the hot path of ever
 
 ## The Solution
 
-Compute every sun and moon event in-house from a real astronomical engine, then reconcile it against the vendor field by field: the vendor's value when it exists, the computed one when it does not. The production engine is the `astronomy-engine` npm package, called from Ruby through a long-lived Node process; a pure-Ruby library stands in during development and test. Keeping that path off the CPU budget did not mean a general cache, because the two obvious caches both made things worse. What the measurements point to is narrower: precompute the one field that is identical for everyone on Earth, and interpolate it.
+Compute every sun and moon event in-house from a real astronomical engine, then reconcile it against the vendor field by field: the vendor's value when it exists, the computed one when it does not. The production engine is the `astronomy-engine` npm package, called from Ruby through a long-lived Node process; a pure-Ruby library stands in during development and test. Keeping that path off the CPU budget did not mean a general cache, because the two obvious optimizations, a swap to a lighter engine and a cache over it, both made things worse. What the measurements point to is narrower: precompute the one field that is identical for everyone on Earth, and interpolate it.
 
 ### Backfill only the field the vendor omitted
 
@@ -105,34 +105,34 @@ astro.rise_set(41.87, -87.62, Time.now.utc.strftime("%Y-%m-%dT00:00:00Z"), 1)
 
 The detail to keep is the `null` returns. Above the Arctic Circle in summer the sun never sets, so `SearchRiseSet` returns nothing and every field reading through this can be nil. The reconciler treats a nil rise or set as a real answer. Polar regions are a supported location, not an edge case to crash on.
 
-This bridge is also why the path costs what it does. The persistent Node process is warm memory, and the web server runs two Ruby worker processes per dyno, so there can be two warm JavaScript runtimes per dyno. That memory buys the engine's accuracy. It is also what made caching look irresistible.
+This bridge is also why the path costs what it does. The persistent Node process is warm memory, one per Ruby worker process. In May 2026 the web server ran two workers per dyno, so two warm JavaScript runtimes per dyno; since then it runs one. That memory buys the engine's accuracy. It is also what made dropping the runtime, and caching its replacement, look irresistible.
 
 ### The cache that multiplied by worker count
 
-The backfill is the same calculation over and over: one city recomputes the identical sky thousands of times an hour. That is the textbook case for a cache, and the pure-Ruby astronomy library ships one, a process-local least-recently-used cache, off by default. It was enabled in production with a conservative 1,000-entry cap, expecting lower CPU for a little memory.
+The backfill is the same calculation over and over: one city recomputes the identical sky thousands of times an hour. That is the textbook case for a cache, and the pure-Ruby astronomy library ships one, a process-local least-recently-used cache, off by default. The two optimizations arrived together. In May 2026 the pure-Ruby library replaced the Node engine in production to reclaim the warm-process memory, and it regressed Ruby CPU. The same day, its cache was enabled with a conservative 1,000-entry cap to win that CPU back.
 
-Both halves were wrong, and it was rolled back within days. Ruby CPU still spiked under real traffic, because the cache's own bookkeeping and the surrounding Ruby work were themselves the cost, not just the astronomy math. And the memory was not a little. A process-local cache is not shared between worker processes, so its cost multiplies by how many you run. The cap held under a megabyte of live objects. After garbage collection, resident memory told a different story:
+The cap came from a local benchmark that swept cache sizes in isolated processes, and its memory column is the part worth keeping. A process-local cache is not shared between worker processes, so its cost multiplies by how many you run. The 1,000-entry cache held under a megabyte of live objects. After a garbage-collection and compaction pass, resident memory told a different story:
 
 ```ruby
 ENTRIES        = 1_000   # LRU cap enabled in the production canary
-LIVE_MB        = 0.9     # live ObjectSpace the entries actually held
-AFTER_GC_MB    = 31.6    # resident-memory growth per worker, post-GC
-FALCON_WORKERS = 2       # Ruby worker processes per dyno
+LIVE_MB        = 0.9     # live ObjectSpace freed by clearing the entries
+AFTER_GC_MB    = 31.6    # resident-memory growth per worker vs. disabled, post-GC
+FALCON_WORKERS = 2       # Ruby worker processes per dyno at the time
 
 puts "live objectspace:       #{LIVE_MB} MB"      # what you reason about
 puts "after-GC RSS / process: #{AFTER_GC_MB} MB"  # what you actually pay
-puts "after-GC RSS / dyno:    #{AFTER_GC_MB * FALCON_WORKERS} MB"  # ~63 MB
+puts "after-GC RSS / dyno:    #{AFTER_GC_MB * FALCON_WORKERS} MB"  # budgeted as ~64 MB
 ```
 
-The 0.9 MB is the number you reason about. The ~63 MB per dyno is the number that bills you: resident memory after garbage collection, multiplied by every process that holds a copy. The library's cache stays off, and re-enabling it now requires a fresh canary.
+The 0.9 MB is the number you reason about. The ~64 MB per dyno is the number that bills you: resident memory after garbage collection, multiplied by every process that holds a copy. The rollout budgeted that against the two warm Node runtimes it was replacing and shipped.
 
-A second optimization failed around the same time and cut the other way. To drop the Node runtime and reclaim its warm-process memory, the pure-Ruby library was tried as the production engine, and it regressed CPU. The two reversals bracket the design space: the JS engine is CPU-cheap but memory-expensive, the Ruby engine the reverse, and a general cache over either paid in the wrong currency. The way out was not to cache the calculation but to stop doing most of it.
+What the benchmark could not show was real traffic. Ruby time still spiked past its guardrails with the cache on, and two days later both changes were rolled back: the Node engine returned to production and the pure-Ruby library went back to development and test. The library's cache stays off, and re-enabling it now requires a fresh CPU and memory canary. The two reversals bracket the design space: the JS engine is CPU-cheap but memory-expensive, the Ruby engine the reverse, and a cache over the Ruby engine paid in memory without buying back enough CPU. The remaining direction was not to cache the calculation but to stop doing most of it.
 
 ### Precompute the one field that is the same everywhere
 
 Sunrise depends on where you are standing. Moon phase does not. The moon shows the same illuminated fraction to everyone on Earth at a given instant, so a moon-phase value needs no location key at all, and it changes slowly and smoothly. A quantity that is global and slow-moving can be sampled onto a grid once and read by interpolation forever after.
 
-So the direction for the moon-phase half is a precomputed grid: sample the phase and illumination every 60 minutes of UTC across the forecast horizon, store the grid, and answer any instant by interpolating between the two nearest samples. Today that grid lives as a benchmark probe with a dedicated rake task, not yet in the serving path; the live reconciler still calls the engine per request. The probe exists so the switch has to prove its speed and accuracy against the engine before it lands, and those are the numbers below.
+So the candidate for the moon-phase half is a precomputed grid: sample the phase and illumination every 60 minutes of UTC across the forecast horizon, store the grid, and answer any instant by interpolating between the two nearest samples. Today that grid lives as a benchmark probe with a dedicated rake task, not in the serving path; the live reconciler still calls the engine per request. An implementation was opened in May 2026 and closed unmerged: the CPU it would save was not expected to be large enough to change the dyno count, so the idea is parked as latency hygiene rather than a cost lever. The probe is what any revival has to beat, and those are the numbers below.
 
 The lookup key is a UTC instant (the forecast day's local middle-of-day, resolved to UTC), never a plain calendar date, because a calendar date is a different real moment in each time zone. This block generates a grid and interpolates it, printing both timings. The `full_moon_phase` stand-in is pure Ruby so the block runs; production computes each sample through the astronomy engine above, which is why the real gap is far wider than this one:
 
@@ -184,9 +184,9 @@ The same precision argument settles the sun's cache key. Sun times shift about 2
 ## Results
 
 - The forecast shows solar noon, civil twilight, moon phase and illumination, and moonrise and moonset on top of the two fields most vendors return.
-- Two optimizations were tried in production and reverted, with the reasons recorded. The process-local cache spiked CPU anyway and turned ~0.9 MB of live objects into ~31.6 MB resident per worker, ~63 MB per dyno. The pure-Ruby engine regressed CPU. Neither returns without a fresh canary.
-- The cost that stays is the warm Node process, up to two per dyno, paid for the engine's accuracy.
-- The 60-minute UTC moon-phase grid benchmarked at roughly 0.003 ms per lookup against 0.284 ms for the full calculation, with illumination error far below what a percentage display can show. It is the committed direction, and the benchmark task is the gate before it replaces the per-request call.
+- Two optimizations were tried in production in May 2026 and reverted two days later, with the reasons recorded. The pure-Ruby engine regressed CPU, and its process-local cache did not win enough back; the pre-rollout benchmark had already priced that cache at ~0.9 MB of live objects but ~31.6 MB resident per worker, ~64 MB per dyno. Neither returns without a fresh canary.
+- The cost that stays is the warm Node process, one per Ruby worker: two per dyno then, one since the worker count dropped to one, paid for the engine's accuracy.
+- The 60-minute UTC moon-phase grid benchmarked at roughly 0.003 ms per lookup against 0.284 ms for the full calculation, with illumination error far below what a percentage display can show. Its implementation was closed unmerged in May 2026 as too small a CPU win to justify a dyno probe; the benchmark task remains the gate if it is revived.
 
 ## Lessons Learned
 
@@ -206,3 +206,5 @@ The same precision argument settles the sun's cache key. Sun times shift about 2
 Ten Claude agents mined the iOS, web, and Android skills, the iOS changelog, and the plan indexes for uncovered topics; the owner picked four from the ranked list. This post was researched and drafted by one agent from the cited skills, plans, and code, under the why-then-how voice and self-contained-code brief settled in the previous localization batch, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The title lost its subtitle, the bolded rules in the body moved into Lessons Learned, Results now holds only what changed and what it cost, and the caveat that the moon grid is not yet in the serving path stays. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The cache section was resequenced to match the commits: the pure-Ruby engine replaced the Node one first (May 4, 2026), its cache was enabled the same day to recover CPU, and both were rolled back two days later; the 0.9 MB and 31.6 MB figures came from the pre-rollout benchmark and were budgeted, not discovered in production, so "both halves were wrong" and the unsupported "cache bookkeeping" explanation were removed, and the per-dyno figure now reads ~64 MB as the plan recorded it. The worker count is dated: two per dyno during the experiment, one since May 2026. The moon grid is no longer called the committed direction: its implementation PR was closed unmerged on May 11, 2026 as too small a CPU win, and the work is parked, so the caveat now says that.

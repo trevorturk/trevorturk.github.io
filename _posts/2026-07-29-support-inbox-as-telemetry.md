@@ -124,7 +124,7 @@ Here is an anonymized composite of what those threads looked like, stitched from
 
 > A subscriber writes in confused: their payment clearly went through and their renewal date is a day or two away, but the app is showing them an upsell and the widget has gone dead. A follow-up message arrives shortly after, usually apologetic: they force-quit the app, opened it again, and everything came back.
 
-That second message is the entire bug report. Every case self-resolved on force-quit and reopen. Not on reinstall, not on re-purchase, not on contacting the store. And in the code, relaunching the app was the *only* thing that triggered the entitlement-refresh path. There was exactly one place that reconciled local state against the billing service. It fired on app open, and it was gated behind a check that skipped it for anyone the app already believed was a member. The users had been running the diagnostic for us for nine years. The workaround named the code path.
+That second message is the entire bug report. Every case self-resolved on a relaunch: force-quit and reopen, or a reboot. Not on reinstall, not on re-purchase, not on contacting the store. And in the code, relaunching the app was the *only* thing that triggered the entitlement-refresh path. There was exactly one place that reconciled local state against the billing service. It fired on app open, and it was gated behind a check that skipped it for anyone the app already believed was a member. The users had been running the diagnostic for us for nine years. The workaround named the code path.
 
 The technique generalizes well beyond billing. When a user reports a workaround, ask what that workaround uniquely triggers. A user action is an input to your code. If a specific action reliably fixes a specific symptom, the code executed by that action contains the repair, which means the bug is in whatever *should* have run earlier and didn't. Restarting the app points at initialization. Toggling airplane mode points at connection setup. Logging out and back in points at token refresh. Force-quitting points at whatever only runs on cold start.
 
@@ -136,12 +136,15 @@ The corpus also undercounts the problem. A user whose widget quietly fixes itsel
 
 A support archive is the most sensitive data most small teams hold. It is unsolicited PII: names, addresses, receipts, and whatever people volunteer while frustrated. So the pipeline was designed around one ordering, decided before anything was ingested: the sensitive artifact is disposable, and the durable artifact is de-identified. Get that right and the privacy story holds even if every other control fails.
 
-The raw corpus never leaves gitignored temp. The mbox and the SQLite database live in `tmp/`, are never committed, never uploaded, never attached to a PR. They are disposable and rebuildable, and after the analysis they were deleted. The CLI's help text says so at the top, so nobody has to infer it.
+The raw corpus never leaves gitignored temp. The mbox and the SQLite database live in `tmp/`, are never committed, never uploaded, never attached to a PR. They are disposable and rebuildable, and the plan treats them as not retained: every finding was written to survive their deletion. The CLI's help text says so at the top, so nobody has to infer it.
 
 Agents receive trimmed digests, not mail. The classification prompt never sees an email. It sees a digest that is PII-free by construction: no addresses, no names, no headers, just direction, subject, and truncated cleaned bodies:
 
 ```ruby
 # lib/support_mail/digester.rb
+messages = messages.first(4) + messages.last(2) if messages.size > 6
+first_inbound = messages.index { |message| message[:direction] == "inbound" }
+
 {
   thread_id: thread_id,
   year: thread[:started_at].to_s[0, 4].to_i,
@@ -156,16 +159,16 @@ Agents receive trimmed digests, not mail. The classification prompt never sees a
 
 Long threads are compressed to the first four and last two messages. The truncation is a privacy control as much as a cost control. 700 characters of the opening message is enough to classify a support request and short enough to rarely reach the part where someone pastes a receipt.
 
-Only aggregates are retained. The corpus was a one-time run, so the analysis had to survive the data being deleted. Two artifacts were committed: a table of aggregate counts, and a row-level CSV with thread ids, bodies, and addresses stripped out, leaving theme, sentiment, resolution, year, and a PII-free one-line summary. Both were explicitly PII-scanned before commit. Future re-slicing needs no re-run and no re-ingestion.
+Only aggregates are retained. The corpus was a one-time run, so the analysis had to survive the data being deleted. Two artifacts were committed: a table of aggregate counts, and a row-level CSV with thread ids, bodies, and addresses stripped out, leaving theme, sentiment, resolution, year, and a PII-free one-line summary. Both were explicitly PII-scanned before commit. Future re-slicing needs no re-run and no re-ingestion. (A July 2026 sweep of completed plans removed both files from the tree, the CSV never having been re-sliced; they remain in git history, and the era-weighted shares live on in the plans index.)
 
-The findings language is anonymized too. Plans, PRs, and commit messages paraphrase ("a subscriber reported...") and never quote. Test fixtures use invented addresses.
+The findings language is anonymized too. The corpus plan's rule is that plans, PRs, and commit messages quote only in anonymized paraphrase ("a 2019 user asked...") and that test fixtures use invented addresses.
 
 ## Results
 
-- 33,377 messages parsed with zero errors into 9,150 human threads, all classified. The parse took under a minute and the full classification run under half an hour. The raw corpus was deleted when the analysis was done, so the committed aggregates and the stripped CSV are the only durable record.
-- One silent bug with a confirmed mechanism, roughly a hundred threads across 2017–2026, and a fix. There is no crash event to watch afterward, so the success criterion is the corpus itself: those reports should trend toward zero.
+- 33,377 messages parsed with zero errors into 9,150 human threads, all classified. The parse took 49 seconds, and the sample projected the full classification run at 15 to 25 minutes. The raw corpus is not retained, so the committed aggregates and the stripped CSV were the durable record until the July 2026 plans sweep moved them into git history.
+- One silent bug with a confirmed mechanism, roughly a hundred threads across 2017–2026, and a fix: the three changes above, implemented on a release branch and awaiting owner QA and a staged rollout as of September 2026. There is no crash event to watch afterward, so the success criterion is the corpus itself: those reports should trend toward zero.
 - Roadmap validation, mostly. The corpus confirmed the existing plan more than it redirected it, with one genuine gap that survived era-weighting and several "top" historical asks that a redesign had already answered.
-- Two by-products. Outbound replies, year-stratified and weighted toward recent mail, became a `support-voice` skill that is now the reference for customer-facing copy. The one-time tool later grew a sibling that reads the live inbox and posts a weekly digest.
+- Two by-products. Outbound replies, year-stratified and weighted toward recent mail, became a `support-voice` skill that is now the reference for customer-facing copy. The one-time tool later grew a sibling that reads the live inbox and posts a Slack digest, weekly at first and folded into the daily ops digest in August 2026.
 
 ## Lessons Learned
 
@@ -185,3 +188,5 @@ The findings language is anonymized too. Plans, PRs, and commit messages paraphr
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and plan docs, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the subscription bug itself, the three-part fix moved out of Results into the section that found the mechanism, Results is the counts and what remains after the corpus was deleted, and Lessons Learned went from eight bullets to four. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The classification wall-clock figure was an estimate from the sample, not a measurement, and now says so with the parse time given exactly (49 seconds); the raw corpus is described as not retained rather than deleted, and the committed aggregates and CSV are noted as swept out of the plans tree in July 2026. The fix is now described as implemented on a branch and awaiting release QA as of September 2026, the weekly inbox digest as folded into the daily digest in August 2026, and the anonymization rule in its source wording. The digester excerpt gained the two lines that define `messages` and `first_inbound`.

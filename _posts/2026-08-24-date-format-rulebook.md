@@ -8,11 +8,11 @@ tags: [swift, ios, localization, i18n, dates]
 
 ## The Problem
 
-The design wants "5pm", not "5 PM", so a screen writes `"ha"` and lowercases the result. `formatter.string(from: date).lowercased()` gives "5pm" in English and quietly breaks everywhere else. Hungarian's meridiem, stripped and lowercased, becomes "de", the word for "but". Japanese, Korean, and Chinese do not use a meridiem for short hours at all, and their dates want a template-driven year-month-day shape no Western pattern produces. Vietnamese headers need day-first order or the numerals run together ambiguously.
+The design wants "5pm", not "5 PM", so a screen writes `"ha"` and lowercases the result. `formatter.string(from: date).lowercased()` gives "5pm" in English and quietly breaks everywhere else. Hungarian's meridiem, stripped and lowercased, becomes "de", the word for "but". Japanese, Korean, and Chinese do not use a meridiem for short hours at all, and their dates want a template-driven year-month-day shape no Western pattern produces. Vietnamese writes weekday and month as numerals, so a month-first header is three numbers colliding.
 
 Another screen writes `"EEE"`, a third copies the lowercasing line, and now the formatters disagree on capitalization and meridiem. The knowledge of what each surface should look like is smeared across dozens of call sites. When a translator reports one of these breaks, there is no one switch to fix. There is a search-and-replace and a hope that you found them all.
 
-The scale makes the smear expensive. [Hello Weather](https://helloweather.com) renders dates on 24 distinct surfaces, a sunrise time under an icon, a weekday rail under the hourly chart, a watch complication with room for three characters, in 27 languages, with a user-selectable 12- or 24-hour clock. One person maintains it, with a model doing the translating and no agency behind it, so there is no room for date code only one screen understands. This post is the date piece of that localization work. [Rendered-width validation](/rendered-width-validation/) and [vendor language probing](/probing-vendor-language-support/) guard the rest.
+The scale makes the smear expensive. [Hello Weather](https://helloweather.com) renders dates on 24 distinct surfaces, a sunrise time under an icon, a weekday rail under the hourly chart, a watch complication hour capped at five characters, in 27 languages, with a user-selectable 12- or 24-hour clock. One person maintains it, with a model doing the translating and no agency behind it, so there is no room for date code only one screen understands. This post is the date piece of that localization work. [Rendered-width validation](/rendered-width-validation/) and [vendor language probing](/probing-vendor-language-support/) guard the rest.
 
 ## The Solution
 
@@ -41,31 +41,39 @@ enum Meridiem {
     case plainLower      // bare lowercase: "5:39pm"
 }
 
-extension Language {
-    enum DateOrder { case western, cjk }
-    enum HeaderOrder { case monthDay, dayMonth }
+enum MeridiemForm { case nativePunctuated, plainLetters }
+enum DateOrderGroup { case western, cjk }
+enum HeaderDateOrder { case monthDay, dayMonth }
 
-    // Most languages want a bare lowercase meridiem. Three keep the punctuated
-    // native form because the stripped version collides with a real word:
-    // Hungarian "de" is the word for "but".
-    var standardMeridiem: Meridiem {
+extension Language {
+    // Most languages take bare lowercase letters. Three keep the punctuated
+    // native form: stripped, the Czech and Finnish markers are not words, and
+    // Hungarian's "de" is the word for "but".
+    var meridiemForm: MeridiemForm {
         switch self {
-        case .hu:                       return .localeDefault
-        case .en, .de, .fr, .ja, .vi:   return .plainLower
+        case .hu:                       return .nativePunctuated
+        case .en, .de, .fr, .ja, .vi:   return .plainLetters
+        }
+    }
+
+    var standardMeridiem: Meridiem {
+        switch meridiemForm {
+        case .nativePunctuated: return .localeDefault
+        case .plainLetters:     return .plainLower
         }
     }
 
     // CJK renders native 年月日 via ICU templates; Western uses explicit patterns.
-    var dateOrder: DateOrder {
+    var dateOrderGroup: DateOrderGroup {
         switch self {
         case .ja:                       return .cjk
         case .en, .de, .fr, .hu, .vi:   return .western
         }
     }
 
-    // Exactly one language orders headers day-first: Vietnamese, where
-    // month-day order runs its numerals into an ambiguous string.
-    var headerOrder: HeaderOrder {
+    // Exactly one language orders headers day-first: Vietnamese, whose numeric
+    // weekday and month collide with the day in month-first order.
+    var headerDateOrder: HeaderDateOrder {
         switch self {
         case .vi:                       return .dayMonth
         case .en, .de, .fr, .hu, .ja:   return .monthDay
@@ -81,20 +89,21 @@ struct DateRenderPlan {
 
     let kind: Kind
     let twentyFourHourVariant: String?
-    let capitalized: Bool
+    let context: Formatter.Context   // .beginningOfSentence capitalizes the first word
     let meridiem: Meridiem
 
     static func pattern(_ p: String, capitalized: Bool) -> DateRenderPlan {
         DateRenderPlan(kind: .pattern(p), twentyFourHourVariant: nil,
-                       capitalized: capitalized, meridiem: .localeDefault)
+                       context: capitalized ? .beginningOfSentence : .unknown,
+                       meridiem: .localeDefault)
     }
     static func time(_ p: String, or h24: String, meridiem: Meridiem) -> DateRenderPlan {
         DateRenderPlan(kind: .pattern(p), twentyFourHourVariant: h24,
-                       capitalized: false, meridiem: meridiem)
+                       context: .unknown, meridiem: meridiem)
     }
-    static func template(_ t: String) -> DateRenderPlan {
-        DateRenderPlan(kind: .template(t), twentyFourHourVariant: nil,
-                       capitalized: false, meridiem: .localeDefault)
+    static func template(_ t: String, or h24: String? = nil) -> DateRenderPlan {
+        DateRenderPlan(kind: .template(t), twentyFourHourVariant: h24,
+                       context: .unknown, meridiem: .localeDefault)
     }
 }
 
@@ -108,35 +117,46 @@ enum DateFormatIntent: String, CaseIterable {
         case .summaryWeekday:
             return .pattern("E", capitalized: false)
         case .dailyHeader:
-            switch language.dateOrder {
+            switch language.dateOrderGroup {
             case .cjk: return .template("MMMdE")
             case .western:
-                switch language.headerOrder {
+                switch language.headerDateOrder {
                 case .monthDay: return .pattern("E, MMM d", capitalized: true)
                 case .dayMonth: return .pattern("E, d MMM", capitalized: true)
                 }
             }
         case .sunEventTime:
-            return .time("h:mma", or: "H:mm", meridiem: language.standardMeridiem)
+            switch language.dateOrderGroup {
+            case .cjk:     return .template("hmm", or: "Hmm")
+            case .western: return .time("h:mma", or: "H:mm", meridiem: language.standardMeridiem)
+            }
         case .forecastUpdatedDateTime:
-            return .time("E, MMM d @ h:mma", or: "E, MMM d @ H:mm",
-                         meridiem: language.standardMeridiem)
+            switch language.dateOrderGroup {
+            case .cjk: return .template("MMMdEhmm", or: "MMMdEHmm")
+            case .western:
+                switch language.headerDateOrder {
+                case .monthDay: return .time("E, MMM d @ h:mma", or: "E, MMM d @ H:mm",
+                                             meridiem: language.standardMeridiem)
+                case .dayMonth: return .time("E, d MMM @ h:mma", or: "E, d MMM @ H:mm",
+                                             meridiem: language.standardMeridiem)
+                }
+            }
         }
     }
 }
 ```
 
-The intent arms contain no list of languages. `dailyHeader` asks `language.dateOrder` and `language.headerOrder` and branches on the answers: the intent knows the shape of a header, and the classifier knows which languages deviate. Because `plan(for:)` has no `default`, a new case does not compile until it has an arm.
+The intent arms contain no list of languages. `dailyHeader` asks `language.dateOrderGroup` and `language.headerDateOrder` and branches on the answers: the intent knows the shape of a header, and the classifier knows which languages deviate. Because `plan(for:)` has no `default`, a new case does not compile until it has an arm.
 
 ### Per-language quirks in named classifiers
 
 The moment a `switch self { case .fi, .hu: … }` appears inside a formatting rule, the reason for the deviation is lost, and the next language that needs the same treatment gets added somewhere else. A named classifier keeps the quirk and its reason together, so every deviation in the app is one arm you can point at.
 
-Each classifier exists because a real language broke a naive rule. `standardMeridiem` records that Hungarian keeps its punctuated form, with the comment "keep the period, bare 'de' is the Hungarian word for 'but'", a note you would not think to write from first principles. `dateOrder` is why CJK languages get ICU templates instead of a hardcoded Western sequence, and why their short hours render as "9時"/"9时"/"9시" rather than "9pm". `headerOrder` is a targeted arm for Vietnamese, not a vague "some languages are day-first" category that would sweep in languages that do not want it.
+Each classifier exists because a real language broke a naive rule. `meridiemForm` records that Hungarian keeps its punctuated form; the locale test that pins the rendering carries the reason, "Adjudicated: keep the period — bare 'de' is the Hungarian word for 'but'", a note you would not think to write from first principles. `dateOrderGroup` is why CJK languages get ICU templates instead of a hardcoded Western sequence, and a sibling `compactHourStyle` is why their short hours render as "9時"/"9时"/"9시" rather than "9pm". `headerDateOrder` is a targeted arm for Vietnamese, not a vague "some languages are day-first" category that would sweep in languages that do not want it.
 
 ### Shaping the meridiem at construction
 
-The house voice wants "5:39pm": lowercase, no space, no periods. Lowercasing the rendered string is wrong twice. It also lowercases any weekday or month name that should stay capitalized, and it applies ASCII casing rules unless you pass a locale, which mangles languages like Turkish. The place to decide the meridiem is when the formatter is built, by shaping its AM/PM symbols before it renders. This function does that, and runs as written.
+The house voice wants "5:39pm": lowercase, no space, no periods. Lowercasing the rendered string is wrong twice. It also lowercases any weekday or month name that should stay capitalized, and it applies ASCII casing rules unless you pass a locale, which mangles languages like Turkish. The place to decide the meridiem is when the formatter is built, by shaping its AM/PM symbols before it renders. This function does that, and runs as written; in the app it is a private method on the formatter cache.
 
 ```swift
 import Foundation
@@ -153,9 +173,9 @@ func applyMeridiem(_ meridiem: Meridiem, to formatter: DateFormatter,
         return
     case .plainLower:
         let bareLowercase: (String) -> String = { symbol in
-            let letters = symbol.unicodeScalars
-                .filter { CharacterSet.alphanumerics.contains($0) }
-                .map(Character.init)
+            let letters = symbol.unicodeScalars.filter {
+                CharacterSet.letters.contains($0) || CharacterSet.decimalDigits.contains($0)
+            }
             return String(letters).lowercased(with: locale)
         }
         if let am = formatter.amSymbol { formatter.amSymbol = bareLowercase(am) }
@@ -164,11 +184,11 @@ func applyMeridiem(_ meridiem: Meridiem, to formatter: DateFormatter,
 }
 ```
 
-It strips non-alphanumeric scalars from the CLDR symbol and lowercases with the locale's own casing rules. "5:39 p. m." becomes "5:39pm", and Turkish "ÖS" becomes "ös" under Turkish casing, not ASCII. The guard on the `a` pattern character lets formatters with no meridiem skip the work. When a call site genuinely needs a different case, it passes a declared `case:` parameter that the formatting layer applies once, locale-aware. Production paths never do, because the voice they want is already in the symbols.
+It keeps only letters and decimal digits from the CLDR symbol and lowercases with the locale's own casing rules. "5:39 p. m." becomes "5:39pm", and Turkish "ÖS" becomes "ös" under Turkish casing, not ASCII. The guard on the `a` pattern character lets formatters with no meridiem skip the work. When a call site genuinely needs a different case, it passes a declared `case:` parameter that the formatting layer applies once, locale-aware. A handful of alternate styles do, to set a rail in caps; the rest never do, because the voice they want is already in the symbols.
 
 ### Source-scanning tests for the bans
 
-"Never lowercase a rendered date" only holds if it cannot be quietly reintroduced, and the compiler cannot see a `.lowercased()` habit the way it sees a missing switch arm. So a test reads every Swift file in the app, runs a regex over it, and fails with the offending file and line. This is the whole check, under Swift Testing, as written.
+"Never lowercase a rendered date" only holds if it cannot be quietly reintroduced, and the compiler cannot see a `.lowercased()` habit the way it sees a missing switch arm. So a test reads every Swift file in the app, runs a regex over it, and fails with the offending matches. This is the whole check, under Swift Testing, as written.
 
 ```swift
 import Testing
@@ -180,14 +200,12 @@ import Foundation
         .deletingLastPathComponent()
         .appendingPathComponent("App")   // your source tree
 
-    static func swiftSources() -> [(url: URL, text: String)] {
+    static func swiftSources() -> [String] {
         guard let files = FileManager.default.enumerator(
             at: sourceRoot, includingPropertiesForKeys: nil) else { return [] }
         return files.compactMap { item in
-            guard let url = item as? URL, url.pathExtension == "swift",
-                  let text = try? String(contentsOf: url, encoding: .utf8)
-            else { return nil }
-            return (url, text)
+            guard let url = item as? URL, url.pathExtension == "swift" else { return nil }
+            return try? String(contentsOf: url, encoding: .utf8)
         }
     }
 
@@ -196,24 +214,27 @@ import Foundation
         try #require(sources.count > 100, "source scan found too few files")
 
         let chain = try NSRegularExpression(pattern:
-            #"withFormat\([^()]*\)\.(?:lowercased|uppercased|capitalized)"#)
+            #"withFormat(?:ForDeviceTimeZone)?\([^()]*\)\.(?:lowercased|uppercased|capitalized)"#
+            + #"|withRelativeFormat\(\)\.(?:lowercased|uppercased|capitalized)"#)
         var offenders: [String] = []
-        for (url, text) in sources {
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            for match in chain.matches(in: text, range: range) {
-                if let r = Range(match.range, in: text) {
-                    offenders.append("\(url.lastPathComponent): \(text[r])")
+        for source in sources {
+            let range = NSRange(source.startIndex..<source.endIndex, in: source)
+            for match in chain.matches(in: source, range: range) {
+                if let r = Range(match.range, in: source) {
+                    offenders.append(String(source[r]))
                 }
             }
         }
         #expect(offenders.isEmpty,
-            "case methods chained on rendered dates: \(offenders). Use "
-            + "withFormat's `case:` parameter so the transform runs once, locale-aware.")
+            "case methods chained on rendered date strings: \(offenders). Use withFormat's "
+            + "`case:` parameter (.lower/.upper) so the formatting layer applies the transform "
+            + "once, locale-aware. (Scan catches case chained directly on a withFormat(...) call "
+            + "only; case reached through an intermediate variable or wrapper must be caught in review.)")
     }
 }
 ```
 
-Two sibling tests round out the bans. One fails if any intent case has no call site: an intent with no UI is either dead code or a wiring bug, and either way the test forces the question. The other freezes the small set of raw format strings the frozen alternate-style catalog may still use, so new UI cannot smuggle in a raw `dateFormat` and has to add an intent instead. Two further exhaustive switches classify every intent by width budget and by worst-case sample, so adding a case fails three separate compiles until it is classified three ways.
+The failure message admits the scan's limit: it catches a case method chained directly on the call, and a transform reached through a wrapper or an intermediate variable is left to review. Two sibling tests round out the bans. One fails if any intent case has no call site: an intent with no UI is either dead code or a wiring bug, and either way the test forces the question. The other freezes the small set of raw format strings the frozen alternate-style catalog may still use, so new UI cannot smuggle in a raw `dateFormat` and has to add an intent instead. Two further exhaustive switches classify every intent by width budget and by worst-case sample, so adding a case fails three separate compiles until it is classified three ways.
 
 ### Hand-pinned English anchors
 
@@ -223,6 +244,7 @@ The rendering of every intent in every language is captured in committed golden 
 @Test func englishAnchorsHoldAtTheEveningInstant() {
     // A hand-picked instant (2026-08-15, 17:39 local), not a machine sample.
     // withFormat / withAppLanguage / DateFormatSamples are the test harness.
+    // Three of the eight 12-hour anchors; the real table also pins the 24-hour clock.
     let anchors: [(DateFormatIntent, String)] = [
         (.dailyHeader,             "Sat, Aug 15"),
         (.sunEventTime,            "5:39pm"),
@@ -261,3 +283,5 @@ These deliberately overlap the English rows in the golden table. The golden reco
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the lowercased meridiem that turns Hungarian's "de" into "but", the two sibling-post links moved from a closing paragraph into The Problem, the title dropped its subtitle, and Lessons Learned keeps only rules the sections do not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The rulebook excerpt now uses the real classifier names (`meridiemForm`, `dateOrderGroup`, `headerDateOrder`), the real `Formatter.Context` field, and the CJK and day-first arms the source has for `sunEventTime` and `forecastUpdatedDateTime`; the meridiem shaper filters letters and digits as the source does; the callsite test carries the source's full regex and its message admitting the scan's limit; the Hungarian "but" note is attributed to the locale test where it lives; the CJK hour counters are credited to `compactHourStyle`; the watch complication is capped at five characters, not three; and the claim that production paths never pass `case:` is corrected, since a few alternate styles do.

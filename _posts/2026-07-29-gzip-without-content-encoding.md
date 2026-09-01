@@ -102,7 +102,7 @@ There is a known trade-off. `read(len)` skips the CRC/footer verification that `
 
 Steady-state cost is negligible. Inflating a realistic 721KB body takes 0.13ms, about 10x cheaper than the `JSON.parse` already running on the same reactor for that same response.
 
-Bomb-sized bodies have never been observed here, and the uncompressed path has never had a size cap either. The cap leans protective. It stays because it costs two self-explanatory lines and nothing on the happy path, and deleting it later loses nothing else.
+Bomb-sized bodies had never been observed here, and the uncompressed path has never had a size cap either. The cap leaned protective. It stayed because it cost two self-explanatory lines and nothing on the happy path, and deleting it later would lose nothing else. Two weeks later, that is what happened.
 
 ## Testing It
 
@@ -138,14 +138,15 @@ The other two cover `parse: :raw` and a corrupt stream (`"\x1f\x8b garbage"`), w
 
 ## Results
 
-- Mislabeled gzip bodies now parse normally instead of 502ing, across every source and every distribution, because the fix sits below all of them.
-- ~12,700 daily errors eliminated, with no CloudFront invalidations required.
-- Vendor encoding problems have a dedicated, host-tagged metric instead of hiding inside a generic `bad_gateway` bucket.
-- Total diff: 55 lines added, one line changed, two files.
+- Mislabeled gzip bodies parsed normally instead of 502ing, across every source and every distribution, because the fix sat below all of them. It was verified by fetching the affected endpoint through the production distribution with the patch applied.
+- Vendor encoding problems got a dedicated, host-tagged metric instead of hiding inside a generic `bad_gateway` bucket.
+- Total diff: 55 lines added, one line changed, two files, landed 2026-07-16.
 
-We also promoted the underlying rule into the repo's always-loaded agent instructions, so future work inherits it:
+The ~12,700 daily errors stopped, but not because of this code. The live invalidations had already cleared the poisoned entries, and the vendor fixed its origin after the incident. In the 14 days the branch was deployed, the `encoding_error` counter fired zero times. On 2026-07-31 a follow-up commit removed the sniff, the cap, the counter, the `Zlib::Error` rescue, and the tests, on the grounds that `bad_gateway` monitoring would surface a recurrence and the commit history is the revive path.
 
-> Web traffic is served by Falcon, so all in-flight requests in a process share one fiber reactor. Blocking CPU on the request path (Zlib inflation, large `JSON.parse`, long-running C calls) stalls every concurrent request on that process, and `task.with_timeout` cannot interrupt blocking C code — timeouts only fire when the reactor runs. Keep request-path work small and bounded: cap input/output sizes and fail fast instead of doing unbounded work, and benchmark new costs against what the path already pays.
+What survived is the rule. It went into the repo's always-loaded agent instructions the same day as the fix, in a separate commit, and it is still there as of September 2026:
+
+> Web traffic is served by Falcon (see `Procfile`), so all in-flight requests in a process share one fiber reactor. Blocking CPU on the request path (Zlib inflation, large `JSON.parse`, long-running C calls) stalls every concurrent request on that process, and `task.with_timeout` cannot interrupt blocking C code — timeouts only fire when the reactor runs. Keep request-path work small and bounded: cap input/output sizes and fail fast (502) instead of doing unbounded work, and benchmark new costs against what the path already pays (see #1605, `Api::AsyncHttp` gzip inflation).
 
 ## Lessons Learned
 
@@ -165,3 +166,5 @@ We also promoted the underlying rule into the repo's always-loaded agent instruc
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and code, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. This was a light pass on a post that already fit the standard: the title dropped to five words, the bolded paragraph runs in Investigation, Fix, and the cap section became bullet lists, Results lost one bullet that restated the fix, and Lessons Learned was cut to four short rules. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The code, tests, and every number matched the original commit; the agent-instructions blockquote was restored to the rule's verbatim wording, which the post had trimmed; and Results was rewritten to say what the source shows: the errors stopped because the vendor fixed its origin, the `encoding_error` counter never fired in production, and a 2026-07-31 commit removed the gzip handling entirely, so the "eliminated with no invalidations" bullet and the present-tense "it stays" sentence were corrected.

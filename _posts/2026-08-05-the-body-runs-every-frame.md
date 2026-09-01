@@ -15,19 +15,29 @@ The drag is a `@GestureState` driving an `.offset` through a computed property, 
 ```swift
 // In a shared extension - every one of these is a computed property.
 extension HourlyView {
-    var hourlyData: [Forecast.Hour] {
+    var hourlyData: [Forecast.Hourly.Hour] {
         viewModel.weather?.forecast?.hourly?.data ?? Forecast.Fallback.hourlyData
     }
 
-    var hourly: [Forecast.Hour] {
-        Array(hourlyData.prefix(min(hourCount, hourlyData.count)))
+    var hourly: [Forecast.Hourly.Hour] {
+        let safeCount = min(hourCount, hourlyData.count)
+        return Array(hourlyData.prefix(safeCount))
     }
 
     var maxHourlyTemp: Int {
         let safeCount = min(hourCount + 2, hourlyData.count)
-        return (hourlyData.prefix(safeCount).map { $0.temperature ?? 0 }.max() ?? 0).toInt
+
+        if SettingsManager.shared.feelsLikeMode {
+            return (hourlyData.prefix(safeCount).map { $0.apparentTemperature ?? $0.temperature ?? 0 }.max() ?? 0).toInt
+        } else {
+            return (hourlyData.prefix(safeCount).map { $0.temperature ?? 0 }.max() ?? 0).toInt
+        }
     }
-    // ...minHourlyTemp and showHourlyPrecips, same shape
+    // ...minHourlyTemp, same shape
+
+    var showHourlyPrecips: Bool {
+        hourly.contains { showPrecip(val: $0.precipProbability ?? 0) }
+    }
 }
 ```
 
@@ -45,9 +55,7 @@ private var hourlyChart: some View {
     let maxTemp = maxHourlyTemp
     let minTemp = minHourlyTemp
     let showPrecips = showHourlyPrecips
-    let dayCalendar = settingsManager.hourlyIsGrouped
-        ? viewModel.weather?.forecast?.currentCalendar
-        : nil
+    let dayCalendar = settingsManager.hourlyIsGrouped ? viewModel.weather?.forecast?.currentCalendar : nil
 
     return HStack(spacing: 2) {
         ForEach(hours.indices, id: \.self) { index in
@@ -58,7 +66,8 @@ private var hourlyChart: some View {
                let currentTime = hour.time,
                let previousTime = hours[index - 1].time,
                calendar.startOfDay(for: currentTime) != calendar.startOfDay(for: previousTime) {
-                DaySeparatorView(day: currentTime)
+                // Simplified: the real separator sits in a GeometryReader that pins it mid-glide.
+                HourlyDaySeparatorView(day: currentTime)
             }
 
             Hour(max: maxTemp, min: minTemp, bar: hour, showPrecips: showPrecips)
@@ -96,21 +105,23 @@ The all-at-once sweep PR was, by every formal measure, done. Build and unit-test
 
 Nothing was wrong with it. But **51 files is beyond confident human review**, and each review round had surfaced new issues, which is the strongest evidence that another round would too. "All checks passed" measures what the checks measure. The question at the merge call is "can a human vouch for this diff?" For 51 files of changes that are 90% mechanical and 10% judgment, the answer was no. The 10% hides in the 90%.
 
-So the PR became a **patch source** instead of a merge candidate: closed, its branch kept on origin under a stable name, and a plan doc decomposing it into 11 slices of one to four files each, ordered, with per-slice notes carrying what an implementer needs. Two slices carry deliberate behavior deltas: the range-clamping hardening, and a rewrite that stops force-unwrapping a nullable timestamp so a missing time skips a separator instead of crashing. Both are flagged in the table and **must disclose those deltas in their PR bodies**. In a sliced re-land, "mostly mechanical" is no longer an acceptable summary. Each slice is either behavior-identical or it says what changed.
+So the PR became a **patch source** instead of a merge candidate: closed, its branch kept on origin under a stable name, and a plan doc decomposing it into 11 slices, most of one to four files (the stats-chart and settings slices ran to eight and twelve), ordered, with per-slice notes carrying what an implementer needs. Two slices carry deliberate behavior deltas: the range-clamping hardening, and a rewrite that stops force-unwrapping a nullable timestamp so a missing time skips a separator instead of crashing. Both are flagged in the table and **must disclose those deltas in their PR bodies**. In a sliced re-land, "mostly mechanical" is no longer an acceptable summary. Each slice is either behavior-identical or it says what changed.
 
 The extraction recipe matters more than it looks:
 
 ```
-git diff main...fix/foreach-hoisting -- <this slice's paths>
+git diff origin/main...origin/fix/foreach-hoisting -- <this slice's paths>
 ```
 
 That applies the **latest** state of each file from the banked branch, never the original sweep commit alone. The review-fix commits amend the sweep, so commit one by itself contains exactly the bugs the reviewers caught. And since `main` drifts while slices land one at a time, each slice re-verifies its files against fresh `main` before applying. Each slice PR cites the banked branch and the reviews it already survived, so slice review is cheap: confirm the extraction is faithful and the slice is self-contained, rather than re-litigate the pattern.
 
 ## Landed So Far
 
-**The watch strip** went first, promoted out of the slice sequence into its own release-blocker lane. One file, byte-identical to the banked version, verified against branch history that the review-fix commits never touched it. Its PR states the expectation up front: finger-tracked dragging improves markedly, but the momentum glide after release stays juddery. The deceleration loop mutates state from a `Task.sleep(16ms)` loop, and watchOS has no display-link to align ticks to vsync, so cheaper frames can't fix irregular presentation. That expectation is written down before the hands-on device check by the project owner, which is the decision gate for whether a separate paged-navigation rewrite (also built, also banked) ships or closes. Recording the expected outcome first is what keeps the check honest.
+**The watch strip** went first, promoted out of the slice sequence into its own release-blocker lane. One file, byte-identical to the banked version, verified against branch history that the review-fix commits never touched it. Its PR states the expectation up front: finger-tracked dragging improves markedly, but the momentum glide after release stays juddery. The deceleration loop mutates state from a `Task.sleep(16ms)` loop, and watchOS has no display-link to align ticks to vsync, so cheaper frames can't fix irregular presentation. That expectation is written down before the hands-on device check by the teammate who reported the choppiness, which is the decision gate for whether a separate paged-navigation rewrite (also built, also banked) ships or closes. Recording the expected outcome first is what keeps the check honest.
 
 **The widget strips** went second: pure hoists in the hourly and minutely widget views, where body cost matters most because widget rendering runs in a time-constrained context. A read-only mini-review returned zero findings and one good nit. With the hoists, an empty data array now evaluates the three getters once instead of zero times, which is safe but is exactly the kind of edge a per-slice review can hold in its head. That nit is the sliced approach working as designed.
+
+**Since then (as of September 2026).** Slice 3 landed the night before this post, and the remaining slices (a twelfth was added when an audit of the banked diff found two minutely views unassigned) all landed the next day, each with a read-only mini-review posted to its PR body. The plan was deleted rather than annotated once the last slice merged. The paged-navigation rewrite closed banked after a hardware bake-off; the momentum loop was instead replaced in place with a single spring retarget, the smallest change on top of shipped code, and the strip shipped after hardware QA on TestFlight builds.
 
 ## The Audit Found More Than the Sweep Fixed
 
@@ -118,7 +129,9 @@ The same audit surfaced a Phase-2 list that the mechanical sweep deliberately ex
 
 - **Per-row calendar chains.** Each hour column formats its timestamp by resolving a calendar and scanning daily data for sun events - about 190 `Calendar` constructions and 72 linear scans per strip body evaluation, across every target that shares the row view. The fix is a parent-computed calendar and sun-event map passed down, which touches shared view APIs.
 - **An O(24²) lookup.** A forecast helper builds its day view with `allHoursInDay.map { first(where:) }` - a linear search per hour. Needs a `Date`-keyed dictionary.
-- **The root multiplier.** The localization helper constructs a fresh `UserDefaults(suiteName:)` and `Locale` on *every string resolution*. Every "rebuild the names dictionary per row" finding in the sweep was this cost times N; caching it needs language-change invalidation and its own careful PR.
+- **The root multiplier.** The localization helper constructs a fresh `UserDefaults(suiteName:)` and `Locale` on *every string resolution*. Every "rebuild the names dictionary per row" finding in the sweep was this cost times N; the plan flagged it as needing caching with language-change invalidation and its own careful PR.
+
+Two of the three shipped the afternoon this post went up. The lookup became a `Date`-keyed dictionary with a contract test. The localization fix sidestepped invalidation entirely: it reads the language setting through an already-shared store on every call and caches only the immutable identifier-to-`Locale` table. The calendar chains were parked instead. A re-check found the app hourly views re-run body about a dozen times per fling, not per frame, so that cost is roughly a millisecond at low frequency, and the item now waits for a profile trace or a user report rather than static op-counting.
 
 The sweep repaired the sites; the audit found the systems. Hoisting is the floor. The ceiling is making the expensive thing cheap once, for everyone.
 
@@ -141,3 +154,5 @@ The sweep repaired the sites; the audit found the systems. Hoisting is the floor
 Research by one Claude agent per repo mining git history since the previous post; this draft was written by a dedicated agent from that research plus the underlying commits and skill files, then reviewed before publishing.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. This was a light pass: stacked sentences were split, a few flourishes cut, the merge-call argument tightened, and Lessons Learned went from eight bullets to five by dropping the ones that repeated a heading. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The first code block now matches the shared extension as it stood before the sweep (`Forecast.Hourly.Hour`, the feels-like branch, `showHourlyPrecips` scanning `hourly`), and the second uses the real separator view name with a note about the omitted pinning geometry. The slice sizes were corrected (the stats-chart and settings slices were eight and twelve files, not one to four), the extraction command now matches the plan's `origin/` form, the hardware check is attributed to the teammate who reported the bug rather than the project owner, and two dated paragraphs record what happened after publication: all slices landed the next day, the paged rewrite closed banked, and two of the three Phase-2 items shipped while the third was parked.

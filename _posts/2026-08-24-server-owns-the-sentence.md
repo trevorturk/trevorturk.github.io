@@ -52,8 +52,9 @@ class DerivedAttributes
 
   private
 
-  def t(key)
-    I18n.t(key, locale: @language.to_sym)
+  # The real helper also memoizes per locale; the lookup is the point.
+  def t(key, **options)
+    I18n.t(key, locale: @language.to_sym, **options)
   end
 
   def pressure_trend
@@ -76,13 +77,13 @@ class DerivedAttributes
 end
 ```
 
-The field pair is what to notice. A `de` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Fallend"}`, and an `en` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Falling"}`. The code is identical across languages, so client logic never parses prose. Only the companion is translated, at the one seam that holds the language.
+The field pair is what to notice. A `de` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Fällt"}`, and an `en` request emits `{"pressure_trend": "falling", "pressure_trend_name": "Falling"}`. The code is identical across languages, so client logic never parses prose. Only the companion is translated, at the one seam that holds the language.
 
 The verbose `case` is the safety, not clutter to remove. Dynamic key lookup turns a missing translation into a shipped string: I18n returns `"translation missing: ..."`, which is content rather than an error, and it renders on a customer's screen. The exhaustive `case` with a raising `else` turns the same gap into a failed test, a bug you hear about from CI instead of from a customer. Keep the case structure when you localize; do not simplify it into an interpolation.
 
 ### One Language List, Two Directions of Aliasing
 
-The valid-language set is derived once, at boot, from the framework's own locale registry, `Rails.application.config.i18n.available_locales`, so there is no second hardcoded list to drift against. Add a locale file and the language becomes valid. The 27 codes (`en cs da de el es fi fr hi hu id it ja ko nb nl pl pt ro ru sv th tr uk vi zh zh_TW`) are exactly the set of files on disk. Validation is then one line, `validates :language, inclusion: { in: LANGUAGE }`, and an unknown code is a clean `400`.
+The valid-language set is derived once, at boot, from the framework's own locale registry, `Rails.application.config.i18n.available_locales`, so the request model keeps no second hardcoded list to drift against. That registry is set in one place, `config/application.rb`, and the 27 codes (`en cs da de el es fi fr hi hu id it ja ko nb nl pl pt ro ru sv th tr uk vi zh zh_TW`) match the locale files on disk one for one. Adding a language is a locale file plus one entry in that list. Validation is then one line, `validates :language, inclusion: { in: LANGUAGE }`, and an unknown code is a clean `400`.
 
 Between the wire and that validation sits normalization. Clients send codes in whatever shape their platform hands them: BCP47 (`de-DE`, `zh-TW`), script codes (`zh-Hans`, `zh-Hant`), legacy provider codes (`zh-tw`), or bare simple codes (`de`). All normalize to the internal simple key first. The subtlety is that two alias tables run in opposite directions, and folding one into the other is a bug invisible until it ships.
 
@@ -160,7 +161,7 @@ module Punctuation
 end
 ```
 
-The two methods are deliberately unequal. `punctuate_summary` does the full pass, with CJK and Thai appending nothing and the danda languages terminating with `।`, and the client deleted its own summary-cleanup code in favor of it. `punctuate_alert` only applies the terminator, with no exclamation-point normalization and no run-collapsing, because an alert is authoritative government prose and reshaping its punctuation would alter an official message. They are kept structurally separate so nobody can later unify them and quietly start rewriting alert text. One exemption completes the picture: strings authored entirely in the locale files, where a translator wrote the sentence and its terminal punctuation, are already display-ready and skip the pass. The rule punctuates what the server assembles; it does not second-guess what a human already finished.
+The two methods are deliberately unequal. `punctuate_summary` does the full pass, with CJK and Thai appending nothing and the danda languages terminating with `।`, and the client deleted its own cleanup code for server summaries in favor of it. `punctuate_alert` only applies the terminator, with no exclamation-point normalization and no run-collapsing, because an alert is authoritative government prose and reshaping its punctuation would alter an official message. They are kept structurally separate so nobody can later unify them and quietly start rewriting alert text. One exemption completes the picture: the level names and phrases that come straight out of the locale files (`"Breathe easy"`, `"Feels muggy"`) are labels a translator finished, not sentences the server assembled, so they get `upcase_first` at most and skip the terminator. The one locale-file string that does take the pass is the icon summary, because it ships in a `summary` slot clients render as a sentence. The rule punctuates what the server presents as a sentence; it does not second-guess what a human already finished.
 
 ### The Test That Catches None of This by Default
 
@@ -171,8 +172,9 @@ The discipline is a one-line convention: when a change is language-dependent, as
 ```ruby
 require "test_helper"
 
-class SummaryPunctuationTest < ActiveSupport::TestCase
-  test "Japanese summaries carry no Latin period; English ones do" do
+class Api::SummaryPunctuationTest < ActiveSupport::TestCase
+  # The real test loops over every output shape; one is shown.
+  test "lang=ja applies the no-append rule end-to-end in every output" do
     en = Api::Weather.new(source: "mock", output: "hello_weather", lang: "en").to_h.deep_symbolize_keys
     ja = Api::Weather.new(source: "mock", output: "hello_weather", lang: "ja").to_h.deep_symbolize_keys
 
@@ -187,9 +189,9 @@ Without the `ja` assertion, the no-terminator rule for CJK could regress and eve
 ## Results
 
 - Every derived string is pinned to the request's language through one helper. No thread-global locale, no per-call-site guesswork, so a concurrently composed response never leaks a second language.
-- Adding a locale file is the whole act of adding a language. The valid set is derived from the framework's locale registry, and inclusion validation returns `400` for anything else. The invertible provider table and the inbound merge are physically separate, and the `pt-BR` outbound flip never shipped.
-- The app deleted its summary-massaging code. Punctuation has one owner, a structurally narrower alert method keeps government prose verbatim, and clients render bytes.
-- The cost accepted: the client keeps its own language list with no parity test, on the bet that a small reviewed bridge is safer than a fragile cross-repo one. That bet has held.
+- Adding a language is a locale file and one registry entry. The valid set is derived from the framework's locale registry, and inclusion validation returns `400` for anything else. The invertible provider table and the inbound merge are physically separate, and the `pt-BR` outbound flip never shipped.
+- The app deleted its summary-massaging code for server text. Punctuation has one owner, a structurally narrower alert method keeps government prose verbatim, and clients render bytes.
+- The cost accepted: the client keeps its own language list with no parity test, on the bet that a small reviewed bridge is safer than a fragile cross-repo one. As of August 2026, that bet has held.
 
 ## Lessons Learned
 
@@ -207,3 +209,5 @@ Without the `ja` assertion, the no-terminator rule for CJK could regress and eve
 Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
 
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The title was shortened, the alias and punctuation sections each state their point once after the code instead of re-walking it, the bolded in-paragraph rules were unbolded, Results folds in the accepted trade-off, and Lessons Learned went from six bullets to the four the body does not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
+
+**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The valid-language set is derived from `available_locales`, but that registry is an explicit list in `config/application.rb`, so the "add a locale file and it becomes valid" claim was corrected to a file plus one registry entry; the German pressure label was fixed from "Fallend" to the real "Fällt"; the `t()` helper excerpt gained the real `**options` signature and a note about its per-locale cache; the test excerpt now carries the real class and test name; the locale-file exemption was reworded, since level phrases skip the terminator but the icon summary takes the pass; the client's deletion of cleanup code was scoped to server summaries (it still normalizes its own generated text); and the "bet has held" claim was dated. The alias tables, `punctuate_summary` and `punctuate_alert`, the 27-code list against both the server registry and the client's 27-case enum, the 400 path, the pt-BR history, and the absence of a cross-repo parity test were confirmed unchanged.
