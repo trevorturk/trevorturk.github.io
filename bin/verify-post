@@ -1,0 +1,38 @@
+#!/bin/bash
+# Usage: verify-post.sh _posts/YYYY-MM-DD-slug.md
+# Checks a revised post against main: fenced code blocks byte-identical,
+# same ## headings in the same order, front matter date unchanged, and the
+# meta section still carries the original prompts. Exit 1 on any failure.
+set -uo pipefail
+cd /Users/trevorturk/Code/trevorturk.github.io
+f="$1"; fail=0
+extract() { awk '/^```/{f=!f; print; next} f'; }
+h2s() { awk '/^```/{f=!f; next} !f && /^## /'; }
+old="$(git show "main:$f")"
+new="$(cat "$f")"
+if ! diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) >/dev/null; then
+  echo "FAIL: code blocks differ from main"; diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) | head -20; fail=1
+fi
+if ! diff <(printf '%s\n' "$old" | h2s) <(printf '%s\n' "$new" | h2s) >/dev/null; then
+  echo "FAIL: ## headings differ from main"; diff <(printf '%s\n' "$old" | h2s) <(printf '%s\n' "$new" | h2s); fail=1
+fi
+if [ "$(printf '%s\n' "$old" | grep -m1 '^date:')" != "$(printf '%s\n' "$new" | grep -m1 '^date:')" ]; then
+  echo "FAIL: date changed"; fail=1
+fi
+# every **Prompt...:** line from main must still be present verbatim
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  if ! printf '%s\n' "$new" | grep -qF -- "$line"; then echo "FAIL: original prompt line missing: ${line:0:80}..."; fail=1; fi
+done < <(printf '%s\n' "$old" | grep '^\*\*Prompt')
+if ! printf '%s\n' "$new" | grep -q '^\*\*Rewrite (2026-09-01):\*\*'; then echo "FAIL: no **Rewrite (2026-09-01):** paragraph"; fail=1; fi
+# links to other posts must survive
+for link in $(printf '%s\n' "$old" | grep -o '](/[a-z0-9-]*/)' | sort -u); do
+  printf '%s\n' "$new" | grep -qF -- "$link" || { echo "FAIL: internal link dropped: $link"; fail=1; }
+done
+# raw tags balanced
+r1=$(printf '%s\n' "$new" | grep -c '{% raw %}'); r2=$(printf '%s\n' "$new" | grep -c '{% endraw %}')
+[ "$r1" = "$r2" ] || { echo "FAIL: raw/endraw unbalanced ($r1/$r2)"; fail=1; }
+body() { awk '/^## How This Post Was Made/{exit} {print}' | awk '/^```/{f=!f; next} !f'; }
+echo "body words: main $(printf '%s\n' "$old" | body | wc -w | tr -d ' ') -> now $(printf '%s\n' "$new" | body | wc -w | tr -d ' ')"
+[ $fail = 0 ] && echo "OK: $f"
+exit $fail
