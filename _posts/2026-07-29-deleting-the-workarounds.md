@@ -2,24 +2,24 @@
 layout: post
 title: "Deleting the Workarounds"
 date: 2026-07-29 09:10:00 -0600
-summary: "Seven months of Apple Watch Digital Crown scrolling workarounds turned out to be the bug. Two structural root causes, one deletion PR, and how to hand-roll scroll momentum on watchOS."
+summary: "For seven months we added workarounds for Digital Crown scrolling in our Apple Watch app, and the workarounds were the bug. Two root causes, one PR that mostly deleted code, and how we wrote our own scroll momentum on watchOS."
 tags: [swift, swiftui, watchos, ios, debugging]
 model: "Claude"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-The Digital Crown in the [Hello Weather](https://helloweather.com) Apple Watch app scrolled *sometimes*. After a finger drag but not before one. From the app list but not from a complication. It went dead after a refresh, and dead again after dismissing an error alert. It never worked at all inside pushed detail screens, or on the root screen after navigating back. A crown that never scrolled would have been easy. Sometimes was the hard case.
+The Digital Crown (the dial on the side of an Apple Watch) scrolled the [Hello Weather](https://helloweather.com) watch app *sometimes*. It worked after you dragged the screen with a finger, but not before. It worked when you opened the app from the app list, but not from a complication (the app's tile on the watch face). It stopped working after a refresh, and again after you dismissed an error alert. It never worked inside the detail screens, or on the root screen after you came back from one. A crown that never scrolled would have been easy to debug. Sometimes was the hard case.
 
-One customer report finally described the mechanism instead of the symptom. On a large watch, the crown was never dead. Turning it silently flung the horizontal "Coming up" hourly strip about thirty hours sideways. On a smaller watch the strip sits below the fold, so the same behavior reads as "the crown does nothing."
+One customer report finally described what was happening instead of what wasn't. On a large watch, the crown was never dead. Turning it flung the horizontal "Coming up" hourly strip about thirty hours sideways. On a smaller watch that strip sits below the fold, so the same thing looks like "the crown does nothing."
 
-That detail reframed everything. The crown wasn't unfocused. It was focused on the wrong thing.
+So the crown wasn't unfocused. It was focused on the wrong thing.
 
 ## The Workaround Pile
 
-Over seven months, each symptom got its own patch. In December the vertical scroll view got `@FocusState` and a focus-on-appear. In March, alerts appearing at launch caused a focus race, so a delayed retry arrived, with an `onChange` refocus on the alert count and a `scenePhase` handler for returning from the background. In May, focus didn't stick after an idle launch, so the single retry became a ladder of three, with a defocus-then-refocus reset in the middle; two weeks later the hourly strip, already suspected of stealing the crown, had its scroll view marked `.focusable(false)`. Error alerts stole focus too. That one was only diagnosed, in July, and never got its own handler.
+Over seven months, each symptom got its own workaround. In December the vertical scroll view got `@FocusState` and code to grab focus when the screen appeared. In March, alerts showing at launch grabbed focus first, so we added a delayed retry, an `onChange` refocus when the alert count changed, and a `scenePhase` handler for coming back from the background. In May, focus still didn't stick after an idle launch, so the single retry became three retries, with a defocus and refocus in the middle. Two weeks after that we marked the hourly strip's scroll view `.focusable(false)`, because we already suspected it was stealing the crown. Error alerts stole focus too. We diagnosed that one in July and never shipped a handler for it.
 
 By July, `ForecastView` looked like this:
 
@@ -61,9 +61,9 @@ struct ForecastView: View {
 }
 ```
 
-Three magic intervals. A defocus/refocus cycle with a 25ms gap. A cancellable task tracking view visibility by hand. Four separate triggers calling into it.
+Three magic intervals. A defocus and refocus with a 25ms gap between them. A cancellable task that tracks by hand whether the view is visible. Four separate triggers calling into it.
 
-Every pushed detail screen carried its own three-line version of the same idea:
+Every detail screen carried its own three-line version of the same idea:
 
 ```swift
 @FocusState private var isScrollViewFocused: Bool
@@ -78,43 +78,43 @@ var body: some View {
 }
 ```
 
-None of it worked completely. Each patch fixed the case it was written for and left the others alone.
+None of it worked completely. Each workaround fixed the case it was written for and left the others alone.
 
 ## Finding the Real Causes
 
-Two changes in method broke the stalemate.
+Two changes in how we tested broke the stalemate.
 
-The first was to stop trusting the folklore that the simulator can't reproduce crown bugs. It can. Plain scroll-wheel events don't register as crown input; you have to post continuous-phase scroll events (`began`/`changed`/`ended`), validated against the watch's own Settings app as a control. That turned every experiment from a device session into a simulator run.
+First, we stopped believing that the simulator can't reproduce crown bugs. It can. Plain scroll-wheel events don't count as crown input, but scroll events with a began, changed, and ended phase do. We checked the simulated input against the watch's own Settings app to make sure it behaved like a real crown. After that, every experiment was a simulator run instead of a device session.
 
-The second was to test with crown-only input, before any touch. Every prior QA pass had tapped or dragged something first, which silently rebound the crown and hid the launch state. Two structural findings fell out immediately.
+Second, we tested with the crown only, before touching the screen. Every earlier QA pass had tapped or dragged something first. That silently gave the crown a new owner and hid the launch state. Two findings fell out right away.
 
 ### Cause 1: nested scrollables compete for crown ownership
 
-watchOS binds the Digital Crown to exactly one scrollable at a time. A horizontal `ScrollView` nested inside the vertical one is still a scroll view, and at launch, it won. Crown rotation drove the hourly strip sideways instead of scrolling the page.
+watchOS binds the crown to one scrollable view at a time. A horizontal `ScrollView` nested inside the vertical one is still a scroll view, and at launch it won. Turning the crown moved the hourly strip sideways instead of scrolling the page.
 
-`.focusable(false)` does not prevent this. Neither does removing the strip's programmatic `scrollTo`. The nested scroll view claimed the crown merely by existing. Every launch-path workaround was fighting for ownership that the layout was handing away.
+`.focusable(false)` doesn't stop this. Removing the strip's programmatic `scrollTo` doesn't either. The nested scroll view claimed the crown just by being there. Every launch-path workaround was fighting for ownership that the layout was handing away.
 
 ### Cause 2: explicit focus management suppresses native crown routing
 
-The detail screens had never crown-scrolled. That bug survived eight-plus experiments in a single June research session, including `@FocusState` reclaim, `.focusable(interactions: .edit)`, `NavigationStack` migration, and `.id`-nonce view recreation.
+The detail screens had never crown-scrolled. That bug survived eight-plus experiments in a single June research session, including reclaiming focus with `@FocusState`, `.focusable(interactions: .edit)`, moving to `NavigationStack`, and recreating the view with an `.id` nonce.
 
-All of those experiments assumed the focus machinery was part of the solution. It was the problem. Remove `.focusable()`/`.focused()`/`onAppear`-focus from a pushed `ScrollView` and watchOS routes the crown to it natively, immediately, in every case. Apple's own documented crown examples never put a raw focusable `ScrollView` in the happy path. When your configuration appears nowhere in the platform's sample code, that's evidence, not coincidence.
+All of those experiments assumed the focus code was part of the solution. It was the problem. Remove `.focusable()`, `.focused()`, and the focus-on-appear from a pushed `ScrollView`, and watchOS routes the crown to it on its own, immediately, in every case. Apple's own documented crown examples never put a raw focusable `ScrollView` in the happy path.
 
-We did the upstream homework before committing to a rewrite. OS release notes, beta notes, and the year's SwiftUI session content contained zero crown focus-ownership changes, while adjacent crown and scroll-view bugs *were* being triaged. The same complication-launch failure had been reported against a first-party Apple app. Nothing was coming from the platform, so we fixed it ourselves.
+Before rewriting anything, we checked whether Apple was about to fix this. The OS release notes, beta notes, and the year's SwiftUI session content had no crown focus-ownership changes, though nearby crown and scroll-view bugs were being triaged. The same complication-launch failure had been reported against one of Apple's own apps. Nothing was coming from the platform, so we fixed it ourselves.
 
 ## The Fix Is a Deletion
 
 The change removed both root causes and every workaround built on top of them:
 
 - The nested horizontal `ScrollView` became a clipped `HStack` panned by a `DragGesture`.
-- With no competing scrollable, the root `ScrollView` bound the crown natively, so all the focus machinery went, along with the `scenePhase` and alert refocus handlers.
+- With no competing scrollable, the root `ScrollView` got the crown on its own, so all the focus code went, along with the `scenePhase` and alert refocus handlers.
 - The three detail screens lost their `.focusable()`/`.focused()`/focus-on-appear blocks.
 
-Net, in app code: 204 lines added, 121 removed (the PR's 391/122 total includes the plan doc), and nearly all of the additions are the hand-rolled pan, not new crown logic. `ForecastView` ended up simpler than it had been *before* the first workaround shipped.
+In app code, that's 204 lines added and 121 removed (the PR's 391/122 total includes the plan doc). Nearly all of the additions are the hand-rolled pan, not new crown logic. `ForecastView` ended up simpler than it was *before* the first workaround shipped.
 
 ### Hand-rolling the pan
 
-Replacing a `ScrollView` means replacing its physics. The strip tracks an offset, clamps it to content width, and applies UIScrollView-style exponential velocity decay after release:
+If you replace a `ScrollView`, you have to replace its physics too. The strip tracks an offset and clamps it to the content width. After you let go, it slows down the way a `UIScrollView` does, by shrinking the velocity a fixed fraction every millisecond:
 
 ```swift
 private var horizontalDragGesture: some Gesture {
@@ -171,17 +171,17 @@ private func decelerate(initialVelocity: CGFloat) {
 }
 ```
 
-Three details carry the pattern:
+Three things to notice:
 
-- **Decay per millisecond, not per frame.** `velocity *= pow(0.998, dt * 1000)` gives identical physics whether the loop ticks at 60Hz or drops frames. A flat per-frame constant does not.
-- **Clamp `dt`.** `min(dt, 0.05)` keeps a resuming app from teleporting the strip to the far edge on its first tick.
-- **Latch the axis by `startLocation`, not by a reset in `onEnded`.** Cancelled gestures never call `onEnded`, so reset bookkeeping there goes stale and deadens the *next* pan. Keying the latch to the start location means every gesture re-latches and there is nothing to clean up.
+- **Decay per millisecond, not per frame.** `velocity *= pow(0.998, dt * 1000)` gives the same physics whether the loop ticks at 60Hz or drops frames. A flat per-frame constant doesn't.
+- **Clamp `dt`.** `min(dt, 0.05)` keeps an app resuming from the background from teleporting the strip to the far edge on its first tick.
+- **Latch the axis by `startLocation`, not by a reset in `onEnded`.** A cancelled gesture never calls `onEnded`, so cleanup there goes stale and deadens the *next* pan. Keying the latch to the start location means every gesture re-latches and there's nothing to clean up.
 
-That is the July shape. As of September 2026 the strip has moved on twice: on 2026-08-06 the sleep loop became a single spring animation toward the gesture's predicted end, because watchOS has no display-link and a sleep loop can never align with vsync, and on 2026-08-15 the pan gave way to a native horizontal `ScrollView` with `.scrollDisabled(true)`, paged by tap and swipe. The focus machinery deleted here has not come back.
+That's the July version. As of September 2026 the strip has changed twice since. On 2026-08-06 the sleep loop became a single spring animation toward the gesture's predicted end point, because watchOS has no display link (a timer tied to the screen refresh) and a sleep loop can't line up with it. On 2026-08-15 the hand-rolled pan gave way to a native horizontal `ScrollView` with `.scrollDisabled(true)`, paged by tap and swipe. The focus code deleted here hasn't come back.
 
 ## Results
 
-Every case in the matrix, exercised with crown-only input before any touch:
+Every case in the matrix, tested with the crown only before any touch:
 
 | Case | Before | After |
 |---|---|---|
@@ -192,12 +192,12 @@ Every case in the matrix, exercised with crown-only input before any touch:
 | Crown inside pushed detail screens | Dead | Works |
 | Crown on root after Back | Dead | Works |
 
-One accepted trade-off, found by hostile runtime QA rather than code review: a vertical page flick that *starts* on the strip is occasionally swallowed, because on watchOS a descendant `DragGesture` starves the outer scroll view's pan. `.simultaneousGesture`, plain `.gesture`, and a larger `minimumDistance` all behave identically. We shipped it anyway. The failure is visible and self-healing (flick again from anywhere else), which is strictly better than a dead crown that gives no feedback at all.
+One trade-off, found by testing the running app rather than by reading the code: a vertical page flick that *starts* on the strip is sometimes swallowed, because on watchOS a `DragGesture` on a child view blocks the outer scroll view's pan. `.simultaneousGesture`, plain `.gesture`, and a larger `minimumDistance` all behave the same. We shipped it anyway. You can see the failure, and flicking again from anywhere else fixes it. A dead crown gives no feedback at all.
 
 ## Lessons Learned
 
-- **N workarounds for one symptom means the workarounds are the bug.** Four patches that each half-fixed the same complaint were four pieces of evidence for a shared cause nobody had named yet.
-- **Reproduce the mechanism, not the symptom.** "Crown doesn't scroll" was unfixable for months. "Crown scrolls the wrong view" was fixed the next day: the mechanism was reproduced in the simulator on 2026-07-21 and the deletion PR merged on 2026-07-22.
+- **If one symptom has several workarounds, the workarounds are the bug.** Four of them each half-fixed the same complaint, which was four pieces of evidence for a shared cause nobody had named.
+- **Reproduce the mechanism, not the symptom.** "Crown doesn't scroll" stayed unfixed for months. "Crown scrolls the wrong view" was fixed the next day: we reproduced it in the simulator on 2026-07-21 and merged the deletion PR on 2026-07-22.
 - **Test the entry state.** Any QA step that touches the screen first destroys the launch-state bug you're hunting.
-- **A workaround that survives long enough becomes an assumption.** The focus machinery was treated as part of the fix, so every experiment kept it and iterated around it.
-- **Adversarial review earns its keep on deletions.** Four review passes caught a refresh-starvation regression, a snap-back bug, a stale gesture latch, and a lost VoiceOver scroll action, none of which the original QA matrix covered.
+- **A workaround that stays long enough gets treated as part of the fix.** Every experiment kept the focus code and iterated around it.
+- **Get a second review on deletions.** Four review passes caught a refresh-starvation regression, a snap-back bug, a stale gesture latch, and a lost VoiceOver scroll action. The original QA matrix covered none of them.
