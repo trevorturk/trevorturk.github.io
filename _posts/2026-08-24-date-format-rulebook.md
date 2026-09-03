@@ -2,31 +2,31 @@
 layout: post
 title: "A Date-Format Rulebook"
 date: 2026-08-24 08:10:00 -0600
-summary: "Why one weather app routes every date and time string through a single enum of UI intents and one exhaustive switch, keeps per-language quirks in named classifiers instead of scattered language lists, and treats a lowercase 'pm' as a construction decision rather than a string hack."
+summary: "How one weather app sends every date and time string through one list of UI intents and one exhaustive switch, keeps each language's quirks in named classifiers instead of scattered language lists, and gets a lowercase 'pm' by shaping the formatter instead of lowercasing its output."
 tags: [swift, ios, localization, i18n, dates]
 ---
 
 ## The Problem
 
-The design wants "5pm", not "5 PM", so a screen writes `"ha"` and lowercases the result. `formatter.string(from: date).lowercased()` gives "5pm" in English and quietly breaks everywhere else. Hungarian's meridiem, stripped and lowercased, becomes "de", the word for "but". Japanese, Korean, and Chinese do not use a meridiem for short hours at all, and their dates want a template-driven year-month-day shape no Western pattern produces. Vietnamese writes weekday and month as numerals, so a month-first header is three numbers colliding.
+The design wants "5pm", not "5 PM". So a screen writes `"ha"` and lowercases the result: `formatter.string(from: date).lowercased()`. That gives "5pm" in English and quietly breaks everywhere else. Hungarian's meridiem, stripped and lowercased, becomes "de", the word for "but". Japanese, Korean, and Chinese don't use a meridiem for short hours at all, and their dates want a year-month-day shape that no Western pattern produces. Vietnamese writes the weekday and the month as numbers, so a month-first header is three numbers in a row.
 
-Another screen writes `"EEE"`, a third copies the lowercasing line, and now the formatters disagree on capitalization and meridiem. The knowledge of what each surface should look like is smeared across dozens of call sites. When a translator reports one of these breaks, there is no one switch to fix. There is a search-and-replace and a hope that you found them all.
+Another screen writes `"EEE"`, a third copies the lowercasing line, and now the formatters disagree on capitalization and meridiem. What each screen should look like is spread across dozens of call sites. When a translator reports one of these breaks, there's no one switch to fix. There's a search-and-replace and a hope that you found them all.
 
-The scale makes the smear expensive. [Hello Weather](https://helloweather.com) renders dates on 24 distinct surfaces, a sunrise time under an icon, a weekday rail under the hourly chart, a watch complication hour capped at five characters, in 27 languages, with a user-selectable 12- or 24-hour clock. One person maintains it, with a model doing the translating and no agency behind it, so there is no room for date code only one screen understands. This post is the date piece of that localization work. [Rendered-width validation](/rendered-width-validation/) and [vendor language probing](/probing-vendor-language-support/) guard the rest.
+The scale makes this expensive. [Hello Weather](https://helloweather.com) shows dates in 24 distinct places: a sunrise time under an icon, a weekday rail under the hourly chart, a watch complication hour capped at five characters. It does that in 27 languages, with a user-selectable 12- or 24-hour clock. One person maintains it, with a model doing the translating and no agency behind it, so there's no room for date code only one screen understands. This post is the date piece of that localization work. [Rendered-width validation](/rendered-width-validation/) and [vendor language probing](/probing-vendor-language-support/) guard the rest.
 
 ## The Solution
 
-Date formatting is declared configuration, not imperative code. Every date string in the app, watch, and widgets flows through three stages:
+We treat date formatting as configuration, not as code each screen writes for itself. Every date string in the app, watch, and widgets goes through three stages:
 
-- An intent enum whose cases name UI surfaces (`sunEventTime`, `dailyHeader`), not formats.
-- One exhaustive `plan(for:)` switch mapping an intent plus a language to a render plan.
-- Named classifiers on the language enum that hold per-language quirks, each a `switch` over every language rather than a language list buried in an intent arm.
+- An intent enum whose cases name places in the UI (`sunEventTime`, `dailyHeader`), not formats.
+- One exhaustive `plan(for:)` switch that maps an intent plus a language to a render plan.
+- Named classifiers on the language enum. A classifier is a property that answers one question about a language ("does it keep its punctuated am/pm?") with a `switch` over every language, so no language list sits inside an intent arm.
 
-The call site is deliberately dumb. `Text(sunset.withFormat(.sunEventTime))` carries no format string, no lowercasing, no locale plumbing. `withFormat` looks up the current language and time zone, asks the intent for its plan, and renders.
+The call site knows nothing. `Text(sunset.withFormat(.sunEventTime))` carries no format string, no lowercasing, no locale plumbing. `withFormat` looks up the current language and time zone, asks the intent for its plan, and renders.
 
 ### One enum of intents, one exhaustive plan
 
-A reviewer fixing how sun times render in Finnish should have exactly one place to look, and adding a dated screen should be impossible without deciding how it reads in every language. An exhaustive switch with no `default` delivers both. The block below is the whole shape in miniature, plan struct, a slice of the intent enum, three classifiers, and the switch that ties them together, and it compiles as written.
+A reviewer fixing how sun times render in Finnish should have one place to look. Adding a dated screen should be impossible without deciding how it reads in every language. An exhaustive switch with no `default` gives us both. The block below shows the shape in miniature: the plan struct, a slice of the intent enum, three classifiers, and the switch that ties them together. It compiles as written.
 
 ```swift
 import Foundation
@@ -146,17 +146,17 @@ enum DateFormatIntent: String, CaseIterable {
 }
 ```
 
-The intent arms contain no list of languages. `dailyHeader` asks `language.dateOrderGroup` and `language.headerDateOrder` and branches on the answers: the intent knows the shape of a header, and the classifier knows which languages deviate. Because `plan(for:)` has no `default`, a new case does not compile until it has an arm.
+The intent arms hold no list of languages. `dailyHeader` asks `language.dateOrderGroup` and `language.headerDateOrder` and branches on the answers. The intent knows the shape of a header, and the classifier knows which languages deviate from it.
 
 ### Per-language quirks in named classifiers
 
-The moment a `switch self { case .fi, .hu: … }` appears inside a formatting rule, the reason for the deviation is lost, and the next language that needs the same treatment gets added somewhere else. A named classifier keeps the quirk and its reason together, so every deviation in the app is one arm you can point at.
+Once a `switch self { case .fi, .hu: … }` shows up inside a formatting rule, the reason for the exception is lost, and the next language that needs the same treatment gets added somewhere else. A named classifier keeps the quirk and its reason together, so every exception in the app is one arm you can point at.
 
-Each classifier exists because a real language broke a naive rule. `meridiemForm` records that Hungarian keeps its punctuated form; the locale test that pins the rendering carries the reason, "Adjudicated: keep the period — bare 'de' is the Hungarian word for 'but'", a note you would not think to write from first principles. `dateOrderGroup` is why CJK languages get ICU templates instead of a hardcoded Western sequence, and a sibling `compactHourStyle` is why their short hours render as "9時"/"9时"/"9시" rather than "9pm". `headerDateOrder` is a targeted arm for Vietnamese, not a vague "some languages are day-first" category that would sweep in languages that do not want it.
+Each classifier exists because a real language broke a naive rule. `meridiemForm` records that Hungarian keeps its punctuated form. The locale test that pins that rendering carries the reason, "Adjudicated: keep the period — bare 'de' is the Hungarian word for 'but'", which nobody would think to write from first principles. `dateOrderGroup` is why the CJK languages (Chinese, Japanese, Korean) get ICU templates, where the system picks the field order, instead of a hardcoded Western order. A sibling classifier, `compactHourStyle`, is why their short hours render as "9時"/"9时"/"9시" rather than "9pm". `headerDateOrder` is a single arm for Vietnamese. We didn't make a vague "some languages are day-first" category, because it would pull in languages that don't want it.
 
 ### Shaping the meridiem at construction
 
-The house voice wants "5:39pm": lowercase, no space, no periods. Lowercasing the rendered string is wrong twice. It also lowercases any weekday or month name that should stay capitalized, and it applies ASCII casing rules unless you pass a locale, which mangles languages like Turkish. The place to decide the meridiem is when the formatter is built, by shaping its AM/PM symbols before it renders. This function does that, and runs as written; in the app it is a private method on the formatter cache.
+The house voice wants "5:39pm": lowercase, no space, no periods. Lowercasing the rendered string is wrong twice over. It lowercases any weekday or month name that should stay capitalized, and unless you pass a locale it uses ASCII casing rules, which mangles languages like Turkish. The right moment to decide the meridiem is when the formatter is built, by changing its AM/PM symbols before it renders anything. This function does that, and it runs as written. In the app it's a private method on the formatter cache.
 
 ```swift
 import Foundation
@@ -184,11 +184,11 @@ func applyMeridiem(_ meridiem: Meridiem, to formatter: DateFormatter,
 }
 ```
 
-It keeps only letters and decimal digits from the CLDR symbol and lowercases with the locale's own casing rules. "5:39 p. m." becomes "5:39pm", and Turkish "ÖS" becomes "ös" under Turkish casing, not ASCII. The guard on the `a` pattern character lets formatters with no meridiem skip the work. When a call site genuinely needs a different case, it passes a declared `case:` parameter that the formatting layer applies once, locale-aware. A handful of alternate styles do, to set a rail in caps; the rest never do, because the voice they want is already in the symbols.
+It keeps only the letters and decimal digits from the locale's own symbol and lowercases them with that locale's casing rules. "5:39 p. m." becomes "5:39pm", and Turkish "ÖS" becomes "ös" under Turkish casing, not ASCII. The guard on the `a` pattern character lets formatters with no meridiem skip the work. When a call site really needs a different case, it passes a declared `case:` parameter, and the formatting layer applies it once, with the locale. A handful of alternate styles do that, to set a rail in caps. The rest never do, because the voice they want is already in the symbols.
 
 ### Source-scanning tests for the bans
 
-"Never lowercase a rendered date" only holds if it cannot be quietly reintroduced, and the compiler cannot see a `.lowercased()` habit the way it sees a missing switch arm. So a test reads every Swift file in the app, runs a regex over it, and fails with the offending matches. This is the whole check, under Swift Testing, as written.
+"Never lowercase a rendered date" only holds if nobody can quietly bring it back, and the compiler can't see a `.lowercased()` habit the way it sees a missing switch arm. So a test reads every Swift file in the app, runs a regex over each one, and fails with the matches it found. This is the complete check, under Swift Testing, as written.
 
 ```swift
 import Testing
@@ -234,11 +234,11 @@ import Foundation
 }
 ```
 
-The failure message admits the scan's limit: it catches a case method chained directly on the call, and a transform reached through a wrapper or an intermediate variable is left to review. Two sibling tests round out the bans. One fails if any intent case has no call site: an intent with no UI is either dead code or a wiring bug, and either way the test forces the question. The other freezes the small set of raw format strings the frozen alternate-style catalog may still use, so new UI cannot smuggle in a raw `dateFormat` and has to add an intent instead. Two further exhaustive switches classify every intent by width budget and by worst-case sample, so adding a case fails three separate compiles until it is classified three ways.
+The failure message admits the scan's limit. It catches a case method chained directly on the call, and a transform reached through a wrapper or an intermediate variable is left to review. Two sibling tests round out the bans. One fails if any intent case has no call site, because an intent with no UI is either dead code or a wiring bug, and either way the test forces the question. The other freezes the small set of raw format strings the frozen alternate-style catalog may still use, so new UI can't slip in a raw `dateFormat` and has to add an intent instead. Two more exhaustive switches classify every intent by width budget and by worst-case sample, so adding a case fails three separate compiles until it's classified three ways.
 
 ### Hand-pinned English anchors
 
-The rendering of every intent in every language is captured in committed golden files, machine-recorded and machine-updated. A [companion post](/golden-files-per-language/) covers that matrix and the fast macOS test tier. The hazard is that a careless record run could bless a regression into the English golden, and the diff would look like every other regeneration. So a handful of English outputs are also pinned by hand, in a table a human edits and a record run never rewrites.
+Every intent's rendering in every language is captured in committed golden files, which a machine records and a machine updates. A [companion post](/golden-files-per-language/) covers that matrix and the fast macOS test tier. The risk is that a careless record run could bless a regression into the English golden, and the diff would look like every other regeneration. So a handful of English outputs are also pinned by hand, in a table a person edits and a record run never rewrites.
 
 ```swift
 @Test func englishAnchorsHoldAtTheEveningInstant() {
@@ -259,20 +259,20 @@ The rendering of every intent in every language is captured in committed golden 
 }
 ```
 
-These deliberately overlap the English rows in the golden table. The golden records what the code currently produces, and the anchors record what a human decided it should produce. If a record run ever drifts the English output, the goldens follow it silently and the anchors go red.
+These overlap the English rows in the golden table on purpose. The golden records what the code produces today, and the anchors record what a person decided it should produce. If a record run ever drifts the English output, the goldens follow it silently and the anchors go red.
 
 ## Results
 
-- Every date string across app, watch, and widgets flows through 24 intents and one exhaustive `plan(for:)` switch. A rendering fix for any language is a single-arm edit instead of a codebase-wide hunt, and each per-language deviation, from the Hungarian meridiem and the Vietnamese day-first header to the CJK hour counters and the six declared weekday arrays, is one classifier arm carrying its reason.
-- "We forgot to handle Vietnamese" is a build error, not a shipped bug. The accepted cost is friction: a new dated surface fails three separate compiles until it is classified by plan, width budget, and worst-case sample.
-- The bans the compiler cannot see, no lowercasing chained on a rendered date, no orphan intents, no new raw format strings, hold in source-scanning tests. Hand-pinned English anchors duplicate golden rows on purpose to guard the machine-recorded ones.
+- Every date string across app, watch, and widgets goes through 24 intents and one exhaustive `plan(for:)` switch. A rendering fix for any language is a one-arm edit instead of a codebase-wide hunt. Each per-language exception, from the Hungarian meridiem and the Vietnamese day-first header to the CJK hour counters and the six declared weekday arrays, is one classifier arm that carries its reason.
+- "We forgot to handle Vietnamese" is a build error, not a shipped bug. The cost is friction: a new dated screen fails three separate compiles until it's classified by plan, width budget, and worst-case sample.
+- The bans the compiler can't see (no lowercasing chained on a rendered date, no orphan intents, no new raw format strings) hold in source-scanning tests. Hand-pinned English anchors duplicate golden rows on purpose, to guard the machine-recorded ones.
 
 ## Lessons Learned
 
-- **Give a one-language exception its own arm and write down why.** A category invented to hold it, "some languages are day-first", sweeps in languages that do not want it.
-- **Decide output shape when you build the formatter, never by editing what it emits.** Post-processing applies the wrong rule to the wrong characters and hides where the decision was made.
-- **Where a test regenerates its own expectations, keep a small parallel set only a human edits.** Otherwise the regeneration blesses the regression it was meant to catch.
-- **The shape transfers to any formatting problem with combinatorial variance: currency, units, addresses, names.** Route through named intents, push variance into classifiers, ban post-processing, and let exhaustive switches refuse the half-specified.
+- **Give a one-language exception its own arm and write down why.** A category invented to hold it, like "some languages are day-first", pulls in languages that don't want it.
+- **Decide the output shape when you build the formatter, not by editing what it emits.** Post-processing applies the wrong rule to the wrong characters and hides where the decision was made.
+- **Where a test regenerates its own expectations, keep a small parallel set only a person edits.** Otherwise the regeneration blesses the regression it was meant to catch.
+- **The same shape works for any formatting problem with a lot of variation: currency, units, addresses, names.** Route through named intents, push the variation into classifiers, ban post-processing, and let exhaustive switches reject a case that isn't decided for every language.
 
 ---
 
@@ -285,3 +285,21 @@ Research by eight Claude agents across the iOS, web, and blog repos (string cata
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the lowercased meridiem that turns Hungarian's "de" into "but", the two sibling-post links moved from a closing paragraph into The Problem, the title dropped its subtitle, and Lessons Learned keeps only rules the sections do not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The rulebook excerpt now uses the real classifier names (`meridiemForm`, `dateOrderGroup`, `headerDateOrder`), the real `Formatter.Context` field, and the CJK and day-first arms the source has for `sunEventTime` and `forecastUpdatedDateTime`; the meridiem shaper filters letters and digits as the source does; the callsite test carries the source's full regex and its message admitting the scan's limit; the Hungarian "but" note is attributed to the locale test where it lives; the CJK hour counters are credited to `compactHourStyle`; the watch complication is capped at five characters, not three; and the claim that production paths never pass `case:` is corrected, since a few alternate styles do.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 1, run after the pilot (#67) merged. The prose was redrafted from an ELI5 (every date goes through one list of UI places, one switch, and per-language classifiers), with "we" and contractions where a person would use them, cleft constructions and third-person distance ("the team", "a human") replaced with plain statements, "surface" replaced by "screen" or "place" everywhere outside the code, and "CJK", "classifier", and "ICU template" defined at first use in prose. Judgment calls: the closing sentence of the exhaustive-plan section, which restated the "no default" rule already given above the code, was cut, and the last Lessons Learned bullet lost its "refuse the half-specified" flourish for a plain description of what the switch rejects. Code blocks, headings, numbers, quoted text, and links are unchanged. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"

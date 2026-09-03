@@ -2,23 +2,23 @@
 layout: post
 title: "Adversarial Review Rounds"
 date: 2026-07-29 08:00:00 -0600
-summary: "Fresh-context reviewers catch what informed review can't. Before the merge call, dispatch two or more read-only reviewer agents with deliberately different lenses and no session context, then adjudicate their findings yourself."
+summary: "A reviewer that knows nothing about the session catches what the session can't. Before deciding to merge a risky change, we send it to two or more read-only reviewer agents, each with a different job and none of our reasoning, and then judge their findings ourselves."
 tags: [ai-agents, code-review, workflow]
 ---
 
 ## The Problem
 
-During a run of watch-app bug fixes on [Hello Weather](https://helloweather.com) in July 2026, fixes kept passing an informed self-review, getting applied, and then failing. Each time, the root cause was wrong or a number in the plan was wrong, and the review had inherited the same wrong belief it was supposed to be checking.
+In July 2026 we were fixing a run of watch-app bugs on [Hello Weather](https://helloweather.com). A fix would pass the agent's own review, get applied, and then fail. Each time, the diagnosis was wrong or a number in the plan was wrong, and the review had believed the same wrong thing it was supposed to check.
 
-Ask a coding agent to review its own work and it does a competent job. It re-reads the diff, checks the obvious failure modes, and reports back. What it cannot do is question the premise it started from. If the session concluded two hours ago that the bug was in the caching layer, every later review runs downstream of that conclusion. The agent re-reads the cache code carefully and finds nothing wrong with the fix, because the fix is a correct fix for the wrong problem. Numbers behave the same way. Once "the label is 128pt wide" lands in the session's context, it gets cited confidently for the rest of the session, and nobody re-measures.
+Ask a coding agent to review its own work and it does a decent job. It re-reads the diff, checks the obvious ways things break, and reports back. What it can't do is question where it started. If the session decided two hours ago that the bug was in the caching layer, every later review starts from there. The agent re-reads the cache code carefully and finds nothing wrong with the fix, because the fix is a correct fix for the wrong problem. Numbers go the same way. Once "the label is 128pt wide" is in the session, it gets repeated for the rest of the session and nobody measures it again.
 
-So context is a liability for review. Full knowledge of the problem, the constraints, and the four approaches already rejected is what makes an agent good at writing the change. It is exactly what makes the same agent bad at auditing it.
+So for review, context is a liability. An agent writes a good change because it knows the problem, the constraints, and the four approaches we already rejected. The same knowledge makes it a bad auditor of that change.
 
 ## The Solution
 
-Before the merge call on a risky change, dispatch two or more independent, read-only reviewer agents. Each gets a deliberately different lens and none of the authoring session's reasoning. They return findings. The main session adjudicates each finding as confirmed, refuted, or a judgment call, digests the rounds into one report for the human, and applies the fixes once after the go-ahead.
+Before we decide to merge a risky change, we send it to two or more separate reviewer agents. They're read-only. Each gets a different job, and none of them gets our reasoning. They send back findings. The main session then marks each finding as confirmed, refuted, or a judgment call, writes the rounds up as one report for the human, and applies the fixes once after the go-ahead.
 
-This is codified across all three Hello Weather repos (web, iOS, Android) as an "Adversarial Review Rounds" section in the code-review skill (web keeps it in its `reviewbot` skill), with a pointer from the pull-requests skill at the merge decision point. It landed on 2026-07-28 as four bullets. As of September 2026 it reads:
+This is written into all three Hello Weather repos (web, iOS, Android) as an "Adversarial Review Rounds" section of the code-review skill (web keeps it in its `reviewbot` skill), with a pointer from the pull-requests skill at the point where you decide whether to merge. It landed on 2026-07-28 as four bullets. As of September 2026 it reads:
 
 > For changes where a wrong claim is expensive — cross-target invariants, persistence/entitlement, layout/geometry, plan docs about to be implemented — propose independent review rounds before the merge call; dispatch only on the user's go-ahead (policy per Trevor, 2026-07-28). Why: an authoring session cannot review its own blind spots; fresh-context reviewers have repeatedly caught wrong root causes and confidently-wrong numbers that survived multiple informed rounds.
 >
@@ -29,31 +29,31 @@ This is codified across all three Hello Weather repos (web, iOS, Android) as an 
 > - **Evidence over assertion.** Findings need a location and a concrete failure scenario; unmeasured claims are labeled estimates. Reviews are sometimes wrong too — re-verify anything load-bearing.
 > - **Converge, bounded.** Usually one round; each re-dispatch needs its own user go-ahead, and only after material rework. A round must not automatically produce a batch of changes — one yielding only rejected, minor, or proposed-as-issue findings ends the cycle.
 
-The iOS copy adds a seventh bullet on running the lenses sequentially in a tool without parallel subagents. The two middle bullets were added on 2026-08-04, after review findings had been applied before the owner saw the report more than once. Otherwise it is written as principles rather than procedure, so it stays useful as models get better at the mechanics.
+The iOS copy adds a seventh bullet on running the lenses one after another in a tool that has no parallel subagents. The two middle bullets were added on 2026-08-04, after fixes from review findings had been applied before the owner saw the report, more than once. The rest is written as principles rather than steps, so it stays useful as models get better at the mechanics.
 
 ## The Lenses
 
-Reviewers must be different, not merely multiple. Three copies of the same reviewer agree with each other and tell you nothing. We use four lenses.
+The reviewers have to be different, not just several. Three copies of the same reviewer agree with each other and tell you nothing. We use four lenses, meaning four different jobs to give a reviewer.
 
-**Fresh eyes.** Zero session context. Here is the diff or the plan doc, here is the repo, tell me what's wrong. This lens catches wrong root causes, because it has no investment in the diagnosis.
+**Fresh eyes.** No session context at all. Here's the diff or the plan, here's the repo, tell me what's wrong. This one catches wrong root causes, because it has nothing invested in the diagnosis.
 
-**Claims audit.** Take every factual assertion in the change, across the commit message, plan doc, code comments, and PR body, and verify each one against the code or a measurement. This lens catches confidently-wrong numbers. On one iOS layout plan, a claims-audit reviewer found two label widths quoted as passing that were under the raw budget but over the plan's own 128pt bar. The same round's implementer dry-run added that the redrafted strings could not be measured at all, so the plan shipped with an actual measurement harness (`tools/measure-stat-widths.swift`) instead of remembered numbers. The harness has since been folded into the width report tests.
+**Claims audit.** Take every factual claim in the change, from the commit message, plan doc, code comments, and PR body, and check each one against the code or a measurement. This one catches confident wrong numbers. On one iOS layout plan, a claims-audit reviewer found two label widths listed as passing that were under the raw budget but over the plan's own 128pt bar. In the same round, the implementer dry-run added that the redrafted strings couldn't be measured at all. So the plan shipped with a real measurement script (`tools/measure-stat-widths.swift`) instead of remembered numbers. That script has since been folded into the width report tests.
 
-**Devil's advocate on a named decision.** Not "review this change" but "we decided X; argue that X is wrong." Naming the decision matters. A general adversarial prompt produces general skepticism, which is noise. A specific one produces a real counter-case or an honest concession.
+**Devil's advocate on a named decision.** Not "review this change" but "we decided X; argue that X is wrong." Naming the decision matters. A general "argue against this" prompt gets you general skepticism, which is noise. A specific one gets you a real counter-case or an honest concession.
 
-**Implementer dry-run.** For plan documents about to be handed to another agent: pretend you are implementing this step by step, and report everywhere the plan is unbuildable, ambiguous, or wrong about the code it references. This catches plans that are conceptually right and operationally useless. Review rounds against a widget plan turned up that every widget time label resolved its timezone from the app's stored weather blob, so a pinned widget would render the app's clock. An earlier shelved implementation had the same defect. The pinned-widget feature therefore needed location-local rendering threaded through the production formatting sites, a step the plan had to gain.
+**Implementer dry-run.** This is for plan documents about to be handed to another agent. Pretend you're implementing this step by step, and report everywhere the plan can't be built, is ambiguous, or is wrong about the code it points at. It catches plans that are right in concept and useless in practice. A round against a widget plan found that every widget time label took its timezone from the app's stored weather data, so a widget pinned to another city would show the app's clock. An earlier shelved implementation had the same defect. The plan had to gain a step: render times in the pinned location's timezone at the production formatting sites.
 
 ## Independence Is the Whole Trick
 
-The failure mode that quietly kills this practice is contaminating the brief. It is tempting to write:
+The mistake that quietly kills this practice is contaminating the brief. It's tempting to write:
 
 > "We think the bug is in the cache invalidation path and we fixed it by clearing on write. Please review."
 
 That hands the reviewer the conclusion you needed it to challenge, and you get back a careful review of the cache invalidation path.
 
-The rule in the skill is blunt: *keep each brief minimal - never include the session's reasoning.* A good brief names the artifact and the lens, and stops. If the reviewer needs to know something, it can read the repo. The fact that it had to go find it is itself signal about whether the change is self-explanatory.
+The skill's rule is blunt: *keep each brief minimal - never include the session's reasoning.* A good brief names the artifact and the lens, and stops. If the reviewer needs to know something, it can read the repo. If it had to go looking, that tells you something about whether the change explains itself.
 
-The corollary is that reviewers must be read-only. No builds, no edits, nothing posted to the PR. Partly this is safety, since you do not want four agents racing to fix the same file. Partly it is role clarity: a reviewer that can edit starts solving instead of reporting, and you lose the finding.
+Reviewers also have to be read-only. No builds, no edits, nothing posted to the PR. Partly that's safety, because you don't want four agents racing to fix the same file. Partly it's about roles. A reviewer that can edit starts solving instead of reporting, and you lose the finding.
 
 A usable brief template, in full:
 
@@ -76,77 +76,77 @@ If a claim you make is not verified against the code, label it an
 estimate. If you find nothing above nit level, say so.
 ```
 
-Swap the `Lens:` line for the other three and you have the round. What is absent matters as much as what is there: the bug we thought we were fixing, the approaches we rejected, and any sentence beginning "we believe."
+Swap the `Lens:` line for the other three and you have the round. What's missing matters as much as what's there: the bug we thought we were fixing, the approaches we rejected, and any sentence beginning "we believe."
 
 ## The Adjudication Step
 
-Reviewers produce findings, not verdicts. An agent asked for a verdict will produce one, and it will be confident, and you will have no way to weigh it against the three other confident verdicts you just got. An agent asked for findings produces a list of specific claims with locations, each of which you can check.
+Reviewers send back findings, not verdicts. Ask an agent for a verdict and it'll give you one, confidently, and you'll have no way to weigh it against the three other confident verdicts you just got. Ask for findings and you get a list of specific claims with locations, each of which you can check.
 
-The main session, whose context is now an asset rather than a liability, goes through every finding and marks it:
+The main session now has the context as an asset rather than a liability. It goes through every finding and marks it:
 
 - **Confirmed** - real, fix it
 - **Refuted** - the reviewer was wrong, and *why* it was wrong gets written down
 - **Judgment call** - real trade-off, escalate to the human or record the decision
 
-The digest goes to the human before anything changes. Since 2026-08-04 the skill forbids any edit, commit, or PR comment from review findings until the owner has read the report and approved. Then the session applies all the fixes in a single pass, not four rounds of patching as reports trickle in.
+The report goes to the human before anything changes. Since 2026-08-04 the skill forbids any edit, commit, or PR comment based on review findings until the owner has read the report and approved. Then the session applies all the fixes in one pass, not four rounds of patching as reports come in.
 
-The refuted bucket is not wasted work. Reviews are sometimes wrong, and knowing exactly how a plausible reviewer misread your code often means the code needs a comment or a clearer name. The step also runs in the other direction. On our web repo, a proposed fix for provider-cache behavior was killed by two independent checks that refuted it with live evidence: a 133-pair sweep found 10.8% of adversarial coordinate pairs changing timezone name. The commit that recorded the refutation, "Refute the coordinate-rounding fix with live evidence," was worth more than the fix would have been.
+The refuted bucket isn't wasted work. Reviewers are sometimes wrong, and knowing exactly how a reasonable reviewer misread your code often means the code needs a comment or a clearer name. The step also runs the other way. On our web repo, two separate checks killed a proposed fix for provider-cache behavior with live evidence. A sweep of 133 coordinate pairs, chosen to break the fix, found 10.8% of them changing timezone name. The commit that recorded it, "Refute the coordinate-rounding fix with live evidence," was worth more than the fix would have been.
 
-One note on cost. Running the lenses is bounded, well-specified work you can hand to a cheaper model. Adjudicating conflicting findings against a codebase you understand is not. Keep the verdict on the most capable model you have, in the session that holds the context.
+One note on cost. Running the lenses is bounded, well-specified work you can hand to a cheaper model. Judging conflicting findings against a codebase you understand is not. Keep the verdict on the most capable model you have, in the session that holds the context.
 
 ## What It Caught
 
 ### A revenue bug on Android
 
-A billing fix made `HomeViewModel` reconcile entitlement for paying members as well as free users, which was correct in itself. An adversarial reviewer noticed that this made a previously-unreachable `clearAll()` path in `PaymentProcessor.fetchInAppPurchases` newly reachable for active subscribers, and produced two concrete failure scenarios:
+A billing fix made `HomeViewModel` reconcile entitlement (whether the user gets paid features) for paying members as well as free users. That was correct on its own. A separate reviewer noticed it also made a `clearAll()` path in `PaymentProcessor.fetchInAppPurchases`, previously unreachable, reachable for active subscribers, and gave two concrete ways it fails:
 
-1. `queryPurchasesAsync` can transiently return OK with an *empty* list (post-reconnect, Play Store updating, propagation lag). An active subscriber opening Home during that window gets their prefs wiped and the widget flipped to the upsell, reintroducing through a different trigger the exact symptom the fix was shipped to remove.
-2. Grandfathered one-time purchase SKUs may have been *consumed* by ancient app versions, so the purchase query never returns them. Those lifetime members would be deterministically wiped on every single Home open.
+1. `queryPurchasesAsync` can briefly return OK with an *empty* list (after a reconnect, while the Play Store is updating, or during propagation lag). An active subscriber opening Home in that window gets their prefs wiped and the widget flipped to the upsell. That's the same symptom the fix shipped to remove, back through a different door.
+2. Grandfathered one-time purchase SKUs may have been *consumed* by very old app versions, so the purchase query never returns them. Those lifetime members would be wiped on every single Home open.
 
-Neither was hypothetical, and neither had surfaced in informed review, because the informed session was thinking about the entitlement bug it had just fixed. The resulting commit is titled "Never revoke entitlement on empty purchase-query results" and states the invariant directly:
+Neither was hypothetical, and neither had come up in informed review, because the informed session was thinking about the entitlement bug it had just fixed. The resulting commit is titled "Never revoke entitlement on empty purchase-query results" and states the rule directly:
 
 > Rule: entitlement is never revoked on the ABSENCE of purchases, only on positive signal or natural lease expiry.
 
-Three unit tests pin empty-while-subscribed, empty-for-lifetime, and the genuinely-lapsed cleanup path. The fix rides Android's paused Release 1 branch, whose PR is still open as of September 2026.
+Three unit tests cover empty-while-subscribed, empty-for-lifetime, and the real lapsed-subscription cleanup path. The fix is on Android's paused Release 1 branch, whose PR is still open as of September 2026.
 
 ### Wrong root causes on iOS
 
-The practice was codified because of the watch-app run above, where fresh-context reviewers kept finding that the diagnosis was wrong, not the patch. One representative round against a location-caching change, with a reviewbot lens, a cold adversarial lens, and a plan-conformance check, produced three confirmed findings in a single pass. Location identity was compared with `==` on raw doubles, so the slot factory never matched and the forecast dictionary could trap on duplicate keys. A travel-distance guard sat on the fetch decision rather than the render path, so a stale record for the previous city could still be *displayed*. And a cache wipe hung off a reset method also called by location selection, so tapping a row wiped the cache the screen had just built.
+We wrote the practice down because of the watch-app run above, where reviewers with no session context kept finding that the diagnosis was wrong, not the patch. One typical round against a location-caching change used a reviewbot lens, a cold-read lens with no session context, and a plan-conformance check, and confirmed three findings in one pass. Location identity was compared with `==` on raw doubles, so the slot factory never matched and the forecast dictionary could crash on duplicate keys. A travel-distance guard sat on the fetch decision rather than the render path, so a stale record for the previous city could still be *displayed*. And a cache wipe hung off a reset method that location selection also called, so tapping a row wiped the cache the screen had just built.
 
-All three survived informed review. None survived a reviewer that had never heard the story.
+All three had passed informed review. None got past a reviewer that had never heard the story.
 
 ### A quieter one on web
 
-A debug flag added for a one-time production investigation got an adversarial pass and came back with two findings. The flag's truthiness check meant setting it to `"false"` would silently *enable* it. And reading a non-2xx response body could raise on a truncated vendor response, turning a handled 502 into an unhandled 500 during exactly the diagnostic window the flag existed to observe. Small change, small review, two real bugs.
+A debug flag added for a one-time production investigation got a separate review and came back with two findings. The flag's truthiness check meant setting it to `"false"` would silently *enable* it. And reading a non-2xx response body could raise on a truncated vendor response, turning a handled 502 into an unhandled 500 during exactly the window the flag existed to observe. Small change, small review, two real bugs.
 
 ## The Failure Case
 
-Review rounds are evidence, not proof. The counter-example was recorded in our web repo's `plans/sentry-fiber-isolation.md`, retired on 2026-08-06 when the upstream fix shipped.
+Review rounds are evidence, not proof. The counter-example is recorded in our web repo's `plans/sentry-fiber-isolation.md`, retired on 2026-08-06 when the upstream fix shipped.
 
-Our async server runs all in-flight requests as fibers on one thread, and they were sharing one error-reporting hub, cross-contaminating tags between requests. We had a patch to isolate the scope per fiber. Version 2 of that patch **passed a full adversarial review round while containing a blocker.** Ruby's fiber storage is inherited by `Thread.new` *as the same object*, so the background-job worker thread pool would have shared a single hub. Execution later confirmed it: four concurrent jobs, one hub, jobs reading each other's tags. A separate counter would have adopted one request's hub for the lifetime of the process.
+Our async server runs all in-flight requests as fibers on one thread. They were sharing one error-reporting hub, so tags from one request leaked into another's error reports. We had a patch to give each fiber its own scope. Version 2 of that patch **passed a full review round while containing a blocker.** Ruby's fiber storage is inherited by `Thread.new` *as the same object*, so the background-job thread pool would have shared a single hub. Running it confirmed that: four concurrent jobs, one hub, jobs reading each other's tags. A separate counter would have kept one request's hub for the life of the process.
 
-The reviewers were competent, the round was properly run, and the bug went through. It got caught by running the thing.
+The reviewers were competent and the round was run properly, and the bug went through. Running the code caught it.
 
-Treating "it passed two adversarial rounds" as a merge criterion would be a new and more expensive kind of false confidence. Adversarial review raises the floor. It does not replace execution, and it does not replace the human on the merge call. The plan recorded the outcome we chose, not to ship the patch at all and to wait for the upstream fix instead, and named the deciding evidence as the blocker review missed. That fix arrived in sentry-ruby 6.7.0 on 2026-08-06, with our `Thread.new` report folded in, and the plan closed with it.
+If "it passed two review rounds" became a merge criterion, that would be a new and more expensive kind of false confidence. Review rounds raise the floor. They don't replace running the code, and they don't replace the human on the merge call. The plan recorded what we chose, which was not to ship the patch and to wait for the upstream fix, and named the blocker the review missed as the deciding evidence. That fix arrived in sentry-ruby 6.7.0 on 2026-08-06, with our `Thread.new` report folded in, and the plan closed with it.
 
 ## Dogfooding
 
-The pull requests that introduced this skill to all three repos were themselves adversarially reviewed, with two lenses: fresh-eyes skill-craft and devil's advocate. The reviewers found real problems in the first cut:
+The pull requests that added this skill to all three repos got the same treatment, with two lenses: fresh eyes on the skill writing and devil's advocate. The reviewers found real problems in the first cut:
 
-- An **unverifiable dated anecdote** used as the section's justification. It sounded authoritative and could not be checked, so it came out.
-- A **citation to a skill that didn't exist.** The Android version of the text pointed at a `reviewbot` skill that only the iOS and web repos have. Copy-paste across repos, caught by a reviewer that actually went looking for the file.
-- A **transcript quote** that added length without adding rule.
-- **Ambiguity about who initiates.** The first draft didn't resolve whether the agent dispatches reviewers on its own. It now proposes, and dispatches only on the user's go-ahead.
-- **Vagueness about when.** "Risky or tricky changes" became a concrete list of trigger classes: cross-target invariants, persistence/entitlement, layout/geometry, plan docs about to be implemented.
-- **No stopping rule.** "Iterate to convergence" became "usually one round; stop when a round returns only nits." The current wording is stricter still: a round yielding only rejected, minor, or proposed-as-issue findings ends the cycle.
+- An **unverifiable dated anecdote** used to justify the section. It sounded authoritative and couldn't be checked, so it came out.
+- A **citation to a skill that didn't exist.** The Android text pointed at a `reviewbot` skill that only the iOS and web repos have. It was copy-pasted across repos, and a reviewer that actually went looking for the file caught it.
+- A **transcript quote** that added length without adding a rule.
+- **Ambiguity about who initiates.** The first draft didn't say whether the agent dispatches reviewers on its own. It now proposes, and dispatches only on the user's go-ahead.
+- **Vagueness about when.** "Risky or tricky changes" became a concrete list of triggers: cross-target invariants, persistence/entitlement, layout/geometry, plan docs about to be implemented.
+- **No stopping rule.** "Iterate to convergence" became "usually one round; stop when a round returns only nits." The current wording is stricter: a round that yields only rejected, minor, or proposed-as-issue findings ends the cycle.
 
-Every one of those is a thing the authoring session had read a dozen times without seeing.
+The authoring session had read every one of those a dozen times without seeing them.
 
 ## Lessons Learned
 
-- **Name the decision you want attacked.** A general adversarial prompt returns general skepticism. "We decided X; argue X is wrong" returns a counter-case or a concession.
-- **Write down why a refuted finding was wrong.** A plausible reviewer misreading your code is usually a sign the code needs a comment or a clearer name.
-- **Delegate the lenses, keep the verdict.** Reviewer briefs are bounded work for a cheaper model. Adjudication needs the context and the most capable model you have.
+- **Name the decision you want attacked.** "Argue against this" returns general skepticism. "We decided X; argue X is wrong" returns a counter-case or a concession.
+- **Write down why a refuted finding was wrong.** If a reasonable reviewer misread your code, the code probably needs a comment or a clearer name.
+- **Delegate the lenses, keep the verdict.** Reviewer briefs are bounded work for a cheaper model. Judging the findings needs the context and the most capable model you have.
 - **Propose the round; don't run it by default.** Parallel reviewers cost real time and tokens. Let the human decide it's worth it, and stop when a round returns only nits.
 - **A passed round is evidence, not proof.** Ours passed a full round with a blocker still in it. Still run the code.
 
@@ -163,3 +163,21 @@ Research by one Claude agent per repo mining git history since the previous post
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the July 2026 run of failed fixes rather than a general observation, the title dropped its subtitle, stacked sentences were split throughout, and Lessons Learned went from ten bullets to five that the body does not already state as headings or bolded rules. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The skill blockquote was replaced with the current six-bullet wording (a user checkpoint and a digest-as-filter bullet were added 2026-08-04, and the read-only and convergence bullets were reworded), the process description gained the checkpoint step, and the web copy was located in the `reviewbot` skill rather than a `code-review` skill. The claims-audit example now matches the stat-card plan (two widths over the 128pt bar; the harness came from the implementer dry-run), the iOS location-caching round's third lens was corrected to plan-conformance, the widget-plan finding is no longer attributed to a specific lens, the Android fix is noted as still on an open release branch, and the Sentry plan is described as retired when sentry-ruby 6.7.0 shipped. The 133-pair sweep, 10.8%, the refutation commit title, the Android rule quote, and the web debug-flag findings were confirmed as written.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 1, run after the pilot (#67) merged. The prose was rewritten from a short plain-language explanation: third-person distance became "we", cleft constructions and nominalizations were unwound, and "adversarial" now appears only where it names the practice or the skill section, with "separate" or "independent" for reviewers and rounds. Judgment calls: "entitlement" and "lens" are defined at first use, Swift's "trap" became "crash", the sweep's "adversarial coordinate pairs" became "pairs chosen to break the fix", and the h2 "Independence Is the Whole Trick" stays because headings are held fixed. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"

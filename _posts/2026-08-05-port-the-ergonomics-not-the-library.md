@@ -2,37 +2,37 @@
 layout: post
 title: "Port the Ergonomics, Not the Library"
 date: 2026-08-05 08:10:00 -0600
-summary: "Bringing snapshot testing from a Ruby codebase to Swift Testing, the thing worth porting turned out to be three ergonomic properties (drop-in assertion, automatic naming, one-flag update), not a package and not a dependency. A design record for a ~100-line helper that shipped two days later."
+summary: "We brought snapshot testing from our Ruby server to Swift Testing without a package or a dependency. The part worth porting was three habits: a one-line assertion, file names worked out from the test name, and one flag to re-record. A design record for a ~100-line helper that shipped two days later."
 tags: [testing, swift, ios, ruby, snapshot-testing, workflow]
 ---
 
 ## The Problem
 
-The [Hello Weather](https://helloweather.com) iOS repo had two snapshot-shaped test systems, both good, both bespoke. One was a golden-table recorder that rewrites a committed Swift file with every language x date-format combination. The other was a diff-on-fail report comparison on a refactor branch. Each is a whole recorder/tests pair, hand-built for a single domain. Adding a *new* snapshot contract, a sync payload shape or a widget timeline dump, meant building a third.
+A snapshot test records a piece of output the first time it runs and fails whenever that output changes. The [Hello Weather](https://helloweather.com) iOS repo had two systems that worked this way, both hand-built for one job. One was a golden-table recorder: it rewrites a committed Swift file with every language x date-format combination. The other compared reports and printed a diff on failure, on a refactor branch. Each one is its own recorder plus its own tests. If we wanted to snapshot something new, a sync payload or a widget timeline, we'd have to build a third.
 
-The Ruby web repo has had the opposite experience for years. A ~170-line gem (`minitest-snapshots`) plus house conventions produced about 90 committed snapshot files across nine test suites, covering things nobody would have written a bespoke recorder for. When asserting "this output stays exactly like this" takes one line, people snapshot everything worth snapshotting. When it takes a recorder class, a file-naming decision, and a regeneration flag, they write the one snapshot test that justifies the ceremony and skip the rest.
+Our Ruby web repo has had the opposite experience for years. A ~170-line gem (`minitest-snapshots`) plus a few house conventions produced about 90 committed snapshot files across nine test suites. Most of them cover things nobody would have built a recorder for. When asserting "this output stays exactly like this" takes one line, people snapshot everything worth snapshotting. When it takes a recorder class, a file-naming decision, and a regeneration flag, they write the one snapshot test that's clearly worth the trouble and skip the rest.
 
-So we designed a port. Not the gem, not a Swift package, and not a dependency on the well-known Swift snapshot-testing library: a single ~100-line internal helper file, because everything risky was already proven in-repo and the only missing piece was the ergonomic layer.
+So we designed a port. Not the gem, not a Swift package, and not a dependency on the well-known Swift snapshot-testing library. We wrote one ~100-line helper file in the test target, because everything risky already worked somewhere in the repo and the only missing piece was the convenience layer.
 
-One caveat up front: **this post was written as a design record, not a shipping report.** The decision and the full design landed as a plans-only PR (iOS #1484, 2026-08-04), with the implementation queued behind an in-flight refactor program so it added no moving parts to a release-blocker lane. The queue was short: the helper shipped two days later (iOS #1514, 2026-08-06) with its first adopter, and as of 2026-09-01 it holds 111 snapshot files across six suites. The code below is the helper as it landed, which is the plan's code with two `Verify:` flags resolved. The decision is still the reusable part.
+One caveat up front: this post was written as a design record, not a shipping report. The decision and the full design landed as a plans-only PR (iOS #1484, 2026-08-04). We queued the implementation behind a refactor that was already in flight, so it wouldn't add moving parts to work that was blocking a release. The queue was short. The helper shipped two days later (iOS #1514, 2026-08-06) with its first adopter, and as of 2026-09-01 it holds 111 snapshot files across six suites. The code below is the helper as it landed, which is the plan's code with two `Verify:` flags resolved. The decision is still the part you can reuse.
 
 ## The Origin: What Makes the Ruby Setup Work
 
-The gem's mechanics are simple. `assert_matches_snapshot value` compares against `test/snapshots/<suite>/<test>__<n>.snap.yaml`, auto-created on first run and auto-numbered per call within a test. `rails test --update-snapshots` overwrites everything. A CI lock makes a *missing* snapshot a hard failure under `ENV["CI"]`, so CI can never silently bless a new one.
+The gem is simple. `assert_matches_snapshot value` compares the value against `test/snapshots/<suite>/<test>__<n>.snap.yaml`. The file is created on the first run, and the number goes up with each call inside a test. `rails test --update-snapshots` overwrites everything. Under `ENV["CI"]` a missing snapshot is a failure, not a new file, so CI can't quietly bless one.
 
-Three ergonomic properties fall out of that, and they are the reason the tool gets used:
+Three things fall out of that, and they're why the tool gets used:
 
-1. **Drop-in assertion.** The entire authoring cost is the one line. No file to create, no name to invent.
-2. **Automatic naming.** The snapshot path is derived from suite + test name. Nobody decides where a snapshot lives.
-3. **One-flag update.** A single command re-records everything the run touches, and then the git diff is the review artifact. Reviewing a behavior change means reading the snapshot diff, same as reviewing a copy change.
+1. **One-line assertion.** Writing the test costs one line. There's no file to create and no name to invent.
+2. **Automatic naming.** The file path comes from the suite and test names. Nobody decides where a snapshot lives.
+3. **One-flag update.** One command re-records everything the run touches, and then you review the git diff. A behavior change gets reviewed by reading the snapshot diff, the same way a copy change does.
 
-Everything else in the web repo is convention layered on that primitive. Two of those conventions transfer on their own.
+Everything else in the web repo is convention built on top of that. Two of those conventions carry over on their own.
 
 ### Snapshot the summary, not the payload
 
-The most common misuse of snapshot testing is freezing a raw payload: a wall of JSON nobody can review, where every diff is noise. The web repo's habit runs the other way. The snapshotted artifact is usually a derived, human-readable summary built to be diffed.
+The most common way to misuse snapshot testing is to freeze a raw payload. That gives you a wall of JSON nobody can review, and every diff is noise. The web repo does the opposite. What it snapshots is usually a readable summary, built to be diffed.
 
-The flagship example: each weather-data adapter's output is snapshotted as a comparison table against a reference adapter, field by field:
+The best example is the weather-data adapters. Each adapter's output is snapshotted as a table that compares it, field by field, against a reference adapter:
 
 ```
 +-------------------------------+----------------------+----------------------+
@@ -45,9 +45,9 @@ The flagship example: each weather-data adapter's output is snapshotted as a com
 |         currently.windBearing | 120                  | 90                   |
 ```
 
-A reviewer scanning that diff can see whether a parser change moved a field, dropped one, or drifted from the reference. Diffing raw vendor JSON tells you none of that.
+A reviewer scanning that diff can see whether a parser change moved a field, dropped one, or drifted from the reference. A diff of raw vendor JSON tells you none of that.
 
-The same move shows up at other layers. SQL behavior is frozen as a normalized statement sequence, literals replaced and comments stripped, so the snapshot captures query *shape* and count rather than volatile values:
+The same idea shows up at other layers. SQL behavior is snapshotted as the list of statements the block ran, with numbers replaced by `?` and comments stripped. The snapshot captures the shape and count of the queries, not values that change from run to run:
 
 ```ruby
 def assert_sql(&block)
@@ -63,13 +63,13 @@ def assert_sql(&block)
 end
 ```
 
-HTTP concurrency behavior is frozen as a spy's serial/parallel request counts, snapshotted as a two-key YAML hash. A request counts as serial if it completed on the same fiber as the previous one. A change that accidentally serializes a parallel fetch fails a test with a two-line diff.
+HTTP concurrency is snapshotted as two numbers: how many requests ran serially and how many in parallel, counted by a spy and saved as a two-key YAML hash. A request counts as serial if it finished on the same fiber as the one before it. A change that accidentally makes a parallel fetch serial fails a test with a two-line diff.
 
-In each case the code that *derives* the summary is the investment, and `assert_matches_snapshot` is the free part. That division of labor only works when the assertion is free.
+In each case the work goes into the code that builds the summary, and `assert_matches_snapshot` costs nothing. The split only works because the assertion is cheap.
 
 ### Coverage by metaprogramming
 
-Because the assertion is one line, generating tests is cheap. The source smoke suite loops over every active data source and every unit system it supports, defining a snapshot test per combination:
+Because the assertion is one line, generating tests in a loop is cheap. The source smoke suite loops over every active data source and every unit system it supports, and defines a snapshot test for each combination:
 
 ```ruby
 Api::Weather::ACTIVE_SOURCES.excluding(REFERENCE_SOURCE).each do |source|
@@ -91,34 +91,34 @@ Api::Weather::ACTIVE_SOURCES.each do |source|
 end
 ```
 
-Adding a new data source automatically adds its comparison test, its per-unit-system output tests, and its request-count tests. The loop picks it up, the first run records the snapshots, and the review is the diff of the new files. Nobody writes tests for a new source; they review what the loop recorded.
+Adding a new data source adds its comparison test, its per-unit-system output tests, and its request-count tests. The loop picks it up and the first run records the snapshots. Nobody writes tests for a new source. They review what the loop recorded.
 
 ### Two safety rules
 
-Snapshot suites accumulate two failure modes, and the web repo has a written rule for each:
+Snapshot suites go wrong in two ways over time, and the web repo has a written rule for each:
 
-- **English-only snapshots hide non-English drift.** A localized output asserted only in `en` passes while every other language regresses. When snapshotting localized content, assert a non-English language too.
-- **A fix diff dominated by snapshot churn is a review smell.** The review checklist flags any PR where the snapshot delta outweighs the change: every wire-visible delta must be the point of the change, not a ride-along. If regenerating snapshots produced a hundred changed lines for a one-line fix, either the fix is bigger than claimed or the snapshots are frozen at the wrong altitude.
+- **English-only snapshots hide non-English drift.** A localized output that's only asserted in `en` keeps passing while every other language regresses. When you snapshot localized content, assert a non-English language too.
+- **A fix whose diff is mostly snapshot churn is suspicious.** The review checklist flags any PR where the snapshot changes outweigh the code change. Anything that changes what goes over the wire has to be the point of the PR, not a side effect. If regenerating snapshots changed a hundred lines for a one-line fix, either the fix is bigger than it claims or the snapshots are freezing the wrong level of detail.
 
 ## The Decision: No Package, No Dependency
 
-The obvious move was to adopt the well-known Swift snapshot-testing library. We decided against it, not because anything is wrong with it, but because an audit of the repo showed every risky mechanic was already proven in-house. The library's breadth (image strategies, a trait system) is surface area the text-snapshot use case doesn't need. It would also have been the first package ever linked into the test target, plus a new entry in the monthly dependency-update cycle. The library's core module remains the explicit upgrade path if image or SwiftUI-view snapshots are ever wanted.
+The obvious move was to adopt the well-known Swift snapshot-testing library. We decided against it. Nothing is wrong with it, but when we audited the repo, every risky mechanic already worked somewhere in-house. The library does a lot we don't need for text snapshots, like image strategies and a trait system. It would also have been the first package ever linked into the test target, and one more entry in the monthly dependency-update cycle. If we ever want image or SwiftUI-view snapshots, the library's core module is the upgrade path.
 
-The audit is the part to copy, because "can our simulator tests even do this?" is the question that usually pushes teams toward a dependency. Three mechanics, three existing proofs:
+The audit is the part to copy, because "can our simulator tests even do this?" is the question that usually pushes a team toward a dependency. Three mechanics, and three places they were already proven:
 
-1. **Simulator tests can write the host source tree.** The golden recorder already resolves `URL(fileURLWithPath: #filePath)` and rewrites a committed Swift file in place from an app-hosted simulator test. The simulator shares the host filesystem, so `#filePath` from a test file is a real, writable path into the repo checkout.
-2. **Environment flags reach the test process.** `xcodebuild` does not forward arbitrary env vars to tests; it forwards only vars prefixed `TEST_RUNNER_`, stripping the prefix. The repo's `bin/unit-test` already plumbs the golden-record flag through exactly this mechanism.
-3. **Readable diff-on-fail already existed** on a refactor branch: a first-eight-differing-lines failure message via `Issue.record`, naming the file and the regenerate command. Lift it.
+1. **Simulator tests can write to the source checkout.** The golden recorder already resolves `URL(fileURLWithPath: #filePath)` and rewrites a committed Swift file in place, from a simulator test hosted in the app. The simulator shares the Mac's filesystem, so `#filePath` in a test file is a real, writable path into the repo.
+2. **Environment flags reach the test process.** `xcodebuild` doesn't forward arbitrary environment variables to tests. It forwards only the ones prefixed `TEST_RUNNER_`, and strips the prefix. The repo's `bin/unit-test` already passes the golden-record flag through this way.
+3. **A readable failure message already existed** on a refactor branch. It printed the first eight differing lines through `Issue.record`, named the file, and gave the regenerate command. We lifted it.
 
-With all three proven, the only thing missing was the ergonomic layer, which is ~100 lines. Port the three properties that make the tool get used; don't import a library to get mechanics you already have.
+With all three proven, the only thing missing was the convenience layer, which is ~100 lines. We ported the three things that make the tool get used instead of importing a library for mechanics we already had.
 
 ### Naming: match the origin literally
 
-The new surface matches the Ruby names exactly: `--update-snapshots` as the flag, `UPDATE_SNAPSHOTS` as the env var, `assertMatchesSnapshot` as the helper, and a `snapshots/` directory mirroring the web repo's `test/snapshots/`. The repo's existing env flags carry an app-specific prefix, and the ruling was to *not* carry that legacy prefix onto new surface for consistency's sake. When two codebases share a convention, an engineer or an agent moving between them should find the same words. Prefer the better name; don't propagate churn-avoidance naming into the future.
+The new names match the Ruby ones: `--update-snapshots` for the flag, `UPDATE_SNAPSHOTS` for the env var, `assertMatchesSnapshot` for the helper, and a `snapshots/` directory like the web repo's `test/snapshots/`. The repo's existing env flags carry an app-specific prefix, and we decided not to put that prefix on the new names just to match. When two codebases share a convention, a person or an agent moving between them should find the same words.
 
 ## The Design
 
-The whole helper is one file in the test target. Lightly trimmed, as it landed:
+The whole helper is one file in the test target. Here it is as it landed, lightly trimmed:
 
 ```swift
 import Testing
@@ -219,9 +219,9 @@ func assertMatchesSnapshot(
 }
 ```
 
-The line to notice is the `guard !Snapshots.locked` after the comparison: under `CI`, both a missing file and an explicit update fail instead of writing, the same lock the gem calls `lock_snapshots`. The `environment` seam exists so the contract tests can exercise the lock without a real `CI` variable. Values are raw strings in `.snap.txt` files rather than the gem's `.snap.yaml`, because the YAML serializer is deliberately not ported. Callers canonicalize to a string (pretty-printed JSON, joined lines), and structured-value overloads wait until a real consumer needs one.
+The line to notice is the `guard !Snapshots.locked` after the comparison. Under `CI`, a missing file and an explicit update both fail instead of writing, which is the same lock the gem calls `lock_snapshots`. The `environment` variable is there so the helper's own tests can exercise the lock without a real `CI` variable. Values are plain strings in `.snap.txt` files rather than the gem's `.snap.yaml`, because we chose not to port the YAML serializer. Callers turn their value into a string first, and overloads for structured values can wait until someone needs one.
 
-The flag side is a few lines in the existing test runner script, using the `TEST_RUNNER_` mechanism already proven for the golden recorder:
+The flag side is a few lines in the existing test runner script, using the same `TEST_RUNNER_` mechanism the golden recorder already used:
 
 ```bash
 # Snapshot update mode: bin/unit-test --update-snapshots (or UPDATE_SNAPSHOTS=1)
@@ -242,27 +242,27 @@ if [ -n "$CI" ]; then
 fi
 ```
 
-The last block is not optional. GitHub Actions sets `CI` in the runner shell, but only `TEST_RUNNER_`-prefixed vars cross into the test process, so plain `CI` never arrives unless the script forwards it explicitly. Miss that and the lock silently never engages.
+The last block isn't optional. GitHub Actions sets `CI` in the runner shell, but only `TEST_RUNNER_`-prefixed variables cross into the test process, so plain `CI` never arrives unless the script forwards it. Miss that and the lock never turns on, and nothing tells you.
 
 ### What Swift Testing changes
 
-A port is not a transliteration. The destination framework reshapes three details:
+A port isn't a word-for-word copy. Swift Testing changes three details:
 
-- **Parallel by default.** Minitest runs a suite's tests in one process, where a simple counter suffices. Swift Testing runs tests in parallel by default, so the `__N` auto-numbering counter must be a lock-guarded dictionary keyed by suite + test. Calls *within* one test are sequential, so numbering stays deterministic per test. The lock only defends the map against concurrent tests touching it.
-- **Parameterized tests collide.** `@Test(arguments:)` runs one function many times, and every invocation shares the same `#function` string, so auto-numbering across parameterized cases would depend on execution order. Parameterized tests must pass an explicit `named:` argument. That is a documented requirement on the helper rather than runtime machinery.
-- **One spelling flagged for verification.** The `sourceLocation: SourceLocation = #_sourceLocation` default argument, which makes failures point at the caller's line rather than the helper's, is the documented pattern for custom assertion helpers. The plan marked it `Verify:` against the toolchain's Swift Testing version before implementation; it compiled as written when the helper landed. Design records should carry their own uncertainty anyway; an implementing agent that hits a compile error on that line should find the plan already told it this might happen.
+- **Parallel by default.** Minitest runs a suite's tests in one process, so a plain counter is enough. Swift Testing runs tests in parallel by default, so the `__N` counter has to be a dictionary keyed by suite and test, with a lock around it. Calls inside one test still run in order, so the numbering is stable per test. The lock only protects the dictionary from two tests touching it at once.
+- **Parameterized tests collide.** `@Test(arguments:)` runs one function many times, and every run has the same `#function` string. Auto-numbering across those runs would depend on which one ran first. So parameterized tests have to pass an explicit `named:` argument. That's a rule written on the helper, not something the helper enforces at runtime.
+- **One spelling flagged for verification.** The `sourceLocation: SourceLocation = #_sourceLocation` default argument makes a failure point at the caller's line instead of the helper's. It's the documented pattern for custom assertion helpers. The plan marked it `Verify:` against the toolchain's Swift Testing version, and it compiled as written when the helper landed. A design record should say what it isn't sure of. An agent that hit a compile error on that line would find the plan had already warned about it.
 
 ### What the helper deliberately does not replace
 
-The plan listed the golden-table system as a non-goal. Its value was compile-enforced exhaustiveness: the table was generated Swift covering `allCases` of language x format intent, so a newly added case *could not* be silently missing from coverage. The plan recorded keeping it as a decision, not an oversight, and left the golden's fate as an open question. The landing PR answered it the other way: the date matrix became the helper's first adopter, rendered from the same `allCases` loops into one snapshot file per language (27 files, byte-equal to what the golden had asserted), and the golden recorder, its generated file, and its flag were deleted. Exhaustiveness now comes from the loops in the test plus exhaustive switches in the contract tests. The plan's other targets, sync payload shapes, widget timeline dumps, notification content, and draining a couple of standalone validator tools into env-gated report-generating tests, are still the helper's to-do list; the report-generating tests are the part that has happened.
+The plan said the golden-table system would stay. Its value was that the compiler checked coverage: the table was generated Swift covering `allCases` of language x format intent, so a newly added case couldn't go missing without a compile error. The plan recorded keeping it as a decision, not an oversight, and left the golden's future as an open question. The landing PR answered it the other way. The date matrix became the helper's first adopter, rendered from the same `allCases` loops into one snapshot file per language (27 files, the same bytes the golden had asserted). The golden recorder, its generated file, and its flag were deleted. Coverage now comes from the loops in the test plus exhaustive switches in the date-format contract tests. The plan's other targets are still the helper's to-do list: sync payload shapes, widget timeline dumps, notification content, and turning a couple of standalone validator tools into report-generating tests that run behind an env flag. The report-generating tests are the part that has happened.
 
 ## Lessons Learned
 
-- **Audit for proven mechanics before reaching for a library.** Writing the host filesystem, env plumbing through `xcodebuild`, readable diff-on-fail: all had in-repo proofs. The dependency would have bought only ergonomics, the cheap part.
-- **The git diff is the review artifact.** First-run auto-record and one-flag update only stay safe when a snapshot diff is read line by line, like a copy change. The mechanism and the culture ship together or not at all.
-- **Verify the CI lock's plumbing.** In an `xcodebuild` world the `CI` variable doesn't reach the test process unless forwarded under `TEST_RUNNER_`. A lock that never engages looks identical to a lock that works.
-- **Port the semantics gap explicitly.** Parallel-by-default and parameterized tests are what a naive transliteration gets wrong. Write down what the destination framework changes, and flag what you haven't verified.
-- **A design record is a shippable artifact.** With the complete helper source, the runner patch, non-goals, and open questions in the plan, implementation is a pick-up task for whoever gets there, not a re-derivation. Here it was picked up two days later, and the landed helper is the plan's code with the two `Verify:` flags resolved.
+- **Check what already works in your repo before adding a library.** Writing the host filesystem, passing env vars through `xcodebuild`, a readable failure message: all three were already proven in-repo. The library would only have added convenience, which is the cheap part.
+- **Review the snapshot diff like a copy change.** Recording on the first run and re-recording with one flag are only safe if someone reads every changed snapshot line.
+- **Check that the CI lock actually turns on.** Under `xcodebuild` the `CI` variable doesn't reach the test process unless the script forwards it as `TEST_RUNNER_CI`. A lock that never turns on looks the same as one that works.
+- **Write down what the new framework changes.** A word-for-word port gets parallel-by-default and parameterized tests wrong. List the differences, and flag what you haven't verified.
+- **A plan with the full code in it can be picked up by anyone.** Ours had the helper source, the runner patch, non-goals, and open questions. It was picked up two days later, and the landed helper is the plan's code with the two `Verify:` flags resolved.
 
 ---
 
@@ -277,3 +277,22 @@ Research by one Claude agent per repo mining git history since the previous post
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the two bespoke recorders and the web repo's 180 snapshots instead of a general observation, the paragraph after the Swift helper names the CI lock instead of re-walking the code, the Swift Testing differences are a list, and Lessons Learned went from nine bullets to five, while the design-record caveat, the PR citation, and the `Verify:` flag stay. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The helper is no longer unshipped: it landed in iOS #1514 on 2026-08-06 with the date matrix as first adopter, the golden-table system the post said would stay was deleted in that PR, and the `#_sourceLocation` spelling compiled as written, so the caveat, the non-goals section, the `Verify:` bullet, and the last lesson were reworded to say so. The Swift and bash excerpts were replaced with the landed code (snake_case sanitization, a defined `firstDifferences`, the test seam for the environment, a do/catch on the write); the helper is ~100 lines rather than ~120, the gem is ~170; and the web repo's live snapshot count is about 90 files across nine suites, not 180 across 17 (the larger number counted an abandoned 2023 snapshot tree in an older naming scheme).
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 1, run after the pilot (#67) merged. This post lost its bolded caveat paragraph, its closing maxims in the Naming section and Lessons Learned, and a set of specialized terms (the ergonomic layer, surface, wire-visible, the wrong altitude, a spy's serial/parallel counts, transliteration) in favor of plain phrases; the design-record caveat, the PR citations, the numbers, and the `Verify:` flag stay. Judgment calls: "the contract tests" in the Design paragraph now reads "the helper's own tests" and in the non-goals section "the date-format contract tests", both checked against the iOS repo's test files, and "byte-equal" became "the same bytes". Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
