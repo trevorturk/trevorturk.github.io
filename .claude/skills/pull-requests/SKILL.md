@@ -31,6 +31,10 @@ Patterns for creating clear, transparent pull requests.
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
+## Voice
+
+PR bodies follow the Plain register rules in `blog-post-generator` (Voice and Structure > Plain register): say it as you would across a desk, define a coined term at first use, verbs over nominalizations, one fact per sentence, no aphorisms, no dramatic precision, one name per thing, and the retired-word list. A reader asked for this on PR descriptions first (issue #66).
+
 ## Requirements
 
 1. **Always include prompts** - Every PR must include a "Prompts Used" section with the prompts that led to the changes

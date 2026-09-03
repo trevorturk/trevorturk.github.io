@@ -58,6 +58,27 @@ Most posts are about architectural work: a pattern chosen, a solution found, a s
 
 **Cut flourishes that carry no information.** These recur across the archive and go on sight: "load-bearing", "the key insight", "this is where the pattern shines", "the beauty of", "nightmare", "worth stealing", "the interesting part", "is the whole point", "Nobody wrote that", "draws blood", "the honest part", "Read that twice". One rhetorical device per section at most.
 
+**Plain register.** Settled 2026-09-03 after a reader said the posts read like AI (issue #66). Sentence length was not the problem; the archive already averaged 20 words. The problems were density and register, and these rules address both:
+
+- **Say it the way you would say it across a desk.** If a phrase would sound odd spoken to a colleague ("byte-identical", "the whole contract", "provenance is what extraction buys"), say the plain thing: "the same bytes", "the rule is", "copying from a reviewed PR is what makes the slice trustworthy".
+- **Define a coined or specialized term the first time it appears,** in a few words, or use the ordinary word. "Hoist" gets "(moving a computation out of a loop)". If the definition costs more than the term saves, drop the term.
+- **Verbs, not nominalizations.** "Verify it again", not "verification has to be paid for again". "The owner rejected it", not "the rejection was on the grounds that".
+- **One new fact per sentence.** A paragraph that introduces four things needs four sentences that each do one thing. Give the reader a breath between them.
+- **No aphorisms.** A section does not end on a quotable line, and a Lessons Learned bullet is a rule in plain words, not a maxim. "Provenance and verification are substitutes" becomes "If a slice is not a straight copy, review it as new code."
+- **No dramatic precision.** "Byte-identical", "zero", "never", "every", "exactly" only when the source says exactly that, and then in plain words ("the same bytes", "none since March").
+- **One name per thing.** Pick a word for each object and keep it for the whole post. Do not rotate slice / cut / diff / PR for the same object.
+- **Retired words.** On sight, alongside the flourish list above: "byte-identical", "byte for byte", "That is the whole X", "the contract" as a stand-in for "the rule", "surface" as a verb, "for free", "adversarial" when "second" or "independent" is meant, "X is what Y buys", "the thing X buys", "has to be paid", "pays for", "on sight", "bespoke", "lean on", "load-bearing". `bin/verify-post` prints the hits.
+
+The reference for what not to do is this paragraph, from the first version of the closed-PRs post, which a reader quoted back as unreadable:
+
+> The limit is that a slice sometimes cannot be a pure extraction. Two of the eleven were closed unmerged on the same day they opened: the owner rejected their hardening deltas, range clamps and stride guards on a server contract the team controls, as speculative defense. Both were re-cut as "lite" slices carrying only the hoists. A lite slice is a bespoke diff, and its PR body says so: the gates and a fresh read-only review are the verification, not provenance. Provenance is the thing extraction buys, and the moment a slice departs from the source, verification has to be paid for again.
+
+Five undefined terms, a nominalization doing the work of a verb, three facts per sentence, and an aphorism to close. The same facts in plain register:
+
+> Not every slice can be copied straight out of the source PR. Two of the eleven were closed the day they opened. Besides moving work out of loops, they also added defensive checks on values from our own server, and the owner rejected those as guarding against a problem we control. Both were reopened with only the loop changes. That made them new code rather than copies, and their PR descriptions say so. A copy is trusted because it came from a reviewed PR. New code has to earn that trust again, with the build gates and a fresh review.
+
+**ELI5 before drafting.** After research and before the draft, write a short explanation of the why, the what, and the how, in the words you would use for a smart person outside the field. Draft the post from that explanation, not from the research notes, and add technical detail back only where it changes a decision. The explanation is scaffolding and does not become a section of the post. On a rewrite, use it as the test: a paragraph you cannot restate that way is the paragraph to fix. The habit comes from [ELI5 as the Default Output Contract](/eli5-as-the-default-output-contract/).
+
 **Titles.** One clause, under about ten words. The detail goes in `summary:`, which the index shows anyway. "Never Touch the Human's Checkout" beats "Never Touch the Human's Checkout: Worktrees, DerivedData, and the QA Handoff for Agents Sharing a Repo".
 
 **Length.** 1,500 to 2,200 words of prose is the usual range. A code tour may run longer in code, not in prose.
@@ -75,18 +96,20 @@ Most posts are about architectural work: a pattern chosen, a solution found, a s
    - What prompted the work: the constraint, gap, question, cost, or failure the opening will name
    - Reference `~/Code/helloweather` for implementation examples
 
-2. **Generate the post** directly to `_posts/`:
+2. **ELI5 the research** in a few paragraphs: why the work happened, what was built, how it works, for a smart reader outside the field. This is the source for the draft (see Plain register above).
+
+3. **Generate the post** directly to `_posts/`:
    - Filename: `_posts/YYYY-MM-DD-slug.md`
    - Include frontmatter (title, date with timestamp, summary, tags)
    - **Use timestamps** for proper ordering: `date: YYYY-MM-DD HH:MM:SS -0600`
    - Follow the template structure below and the Voice and Structure rules above
 
-3. **Add meta section** at the end:
+4. **Add meta section** at the end:
    - Include the prompt that generated the post
    - Brief note about how it was made
    - See template below
 
-4. **Check before the PR**: read the draft against Voice and Structure, then run `bundle exec jekyll build`.
+5. **Check before the PR**: read the draft against Voice and Structure, run `bin/verify-post --new _posts/<file>.md` for the register and sentence report, then `bundle exec jekyll build`.
 
 ## Post Template
 
@@ -146,7 +169,7 @@ Some older posts use a separate `## Implementation` heading between The Solution
 
 ## Revising an Existing Post
 
-For an editing pass or a rewrite of a published post. The archive-wide rewrite of 2026-09-01 followed these rules; the pilot commit on the worktrees post shows the before and after.
+For an editing pass or a rewrite of a published post. The archive-wide rewrite of 2026-09-01 followed these rules; the pilot commit on the worktrees post shows the before and after. The plain-register pass that started 2026-09-03 (issue #66) applies the Plain register rules above and the ELI5 test to each post, with the same things held fixed.
 
 **May change:** prose, paragraph order, section length, the title, the summary, `###` headings, which points land in Results versus Lessons Learned, and hard-wrapped lines (unwrap them; the rest of the archive is one paragraph per line).
 
@@ -161,7 +184,7 @@ For an editing pass or a rewrite of a published post. The archive-wide rewrite o
 
 **Record the pass.** Append a dated **Rewrite (YYYY-MM-DD):** or **Editing pass (YYYY-MM-DD):** paragraph to How This Post Was Made with the prompts verbatim and one sentence on what changed in this post.
 
-**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, the original prompt lines, internal links, `{% raw %}` balance, and the Rewrite paragraph, and prints the prose word count before and after. Then `bundle exec jekyll build`. State both in the PR. `--allow-code-changes` and `--allow-link-changes` exist for the fact-check pass and for deliberately retargeted links.
+**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, the original prompt lines, internal links, `{% raw %}` balance, and a Rewrite or Editing pass paragraph dated today (override with `PASS_DATE=YYYY-MM-DD`), and prints the prose word count, the retired-word hits, and the count of sentences over 25 words, before and after. The register report is informational: a hit on a post whose subject is the word ("adversarial review") is fine; a hit used as a flourish is not. Then `bundle exec jekyll build`. State both in the PR. `--allow-code-changes` and `--allow-link-changes` exist for the fact-check pass and for deliberately retargeted links.
 
 ## Judgment Calls
 
