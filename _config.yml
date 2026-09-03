@@ -31,3 +31,7 @@ exclude:
   - Gemfile
   - Gemfile.lock
   - vendor
+
+# Publish posts whose timestamp is later than the build time. GitHub Pages builds in
+# UTC, so a post dated this afternoon in -0600 was skipped as "future" (PR #75).
+future: true
