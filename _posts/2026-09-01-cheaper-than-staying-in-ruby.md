@@ -2,21 +2,21 @@
 layout: post
 title: "Cheaper Than Staying in Ruby"
 date: 2026-09-01 12:00:00 -0600
-summary: "Nodo runs one long-lived Node process next to Ruby and makes an npm function look like a Ruby method. On a fiber server the socket hop costs a tenth of a millisecond and parks one fiber, while the pure-Ruby port cost 15 ms and stalled every fiber. What it costs is memory, and the rules that keep it safe."
+summary: "Nodo runs one long-lived Node process next to Ruby and makes an npm function look like a Ruby method. On our fiber server the socket hop costs a tenth of a millisecond and parks one fiber, while the pure-Ruby port cost 15 ms and stalled every fiber. The price is memory, plus a few rules that keep a child process safe on the request path."
 tags: [ruby, nodo, node, falcon, async, performance]
 ---
 
 ## The Problem
 
-In May 2026 the pure-Ruby astronomy library replaced the JavaScript one in production, and each sun-and-moon calculation went from 0.28 ms to 15.4 ms and 203,328 Ruby allocations. Two days later it was rolled back. The JavaScript engine had not been running in Ruby at all. It ran in a separate Node process, reached over a Unix socket, and the round trip through that socket was cheaper than doing the arithmetic in Ruby.
+In May 2026 we swapped the JavaScript astronomy library for a pure-Ruby one in production. Each sun-and-moon calculation went from 0.28 ms to 15.4 ms and 203,328 Ruby allocations. Two days later we rolled it back. The JavaScript library had never been running inside Ruby. It ran in a separate Node process that we reached over a Unix socket, and that round trip was cheaper than doing the math in Ruby.
 
-[Hello Weather](https://helloweather.com) computes sunrise, sunset, civil twilight, solar noon, moon phase, illumination, moonrise, and moonset for every forecast day, because most vendors supply only the first two. [Compute the Sky Yourself](/compute-the-sky-yourself/) covers why the engine has to be a real ephemeris and why a cache over the Ruby port did not help. This post is about the bridge underneath: how a Rails app on Falcon calls three npm packages as if they were Ruby, why the process boundary turned out to be the cheap part, what the bridge costs in memory, and the operating rules that make a child process safe on a request path.
+[Hello Weather](https://helloweather.com) computes sunrise, sunset, civil twilight, solar noon, moon phase, illumination, moonrise, and moonset for every forecast day, because most vendors supply only the first two. [Compute the Sky Yourself](/compute-the-sky-yourself/) covers why the engine has to be a real ephemeris (a model of where the sun and moon are at a given moment) and why a cache over the Ruby port didn't help. This post is about the bridge underneath. It covers how our Rails app on Falcon calls three npm packages as if they were Ruby, why the process boundary turned out to be the cheap part, what the bridge costs in memory, and the rules that keep a child process safe on the request path.
 
-The constraint that decides everything is the server model. Under Falcon, every in-flight request in a worker is a fiber on one reactor, and the one resource those fibers cannot share is Ruby CPU. [Falcon and Ruby Async](/falcon-async-performance/) explains the model, and [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/) shows how directly CPU per request converts into dynos. Fifteen milliseconds of pure-Ruby math per forecast day, on the hot path of nearly every request, is not a latency problem. It is a fleet-size problem.
+The server model decides everything here. Under Falcon, every in-flight request in a worker is a fiber on one reactor thread. Fibers can share waiting time, but they can't share Ruby CPU. [Falcon and Ruby Async](/falcon-async-performance/) explains the model, and [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/) shows how CPU per request turns into dyno count. Fifteen milliseconds of Ruby math per forecast day, on nearly every request, adds up to more dynos, not just slower responses.
 
 ## The Solution
 
-Keep the computation in JavaScript, where the best implementations live, and pay for a process boundary instead of a port. The [Nodo](https://github.com/mtgrosser/nodo) gem does the plumbing: it spawns one Node process, loads the packages once, and turns each declared JavaScript function into a Ruby method. The parts that matter:
+We kept the math in JavaScript, where the best implementations live, and accepted a process boundary instead of a port. The [Nodo](https://github.com/mtgrosser/nodo) gem does the plumbing. It spawns one Node process, loads the packages once, and turns each JavaScript function we declare into a Ruby method. The parts that matter:
 
 - A JavaScript function as a Ruby method
 - One coarse call, not many fine ones
@@ -27,7 +27,7 @@ Keep the computation in JavaScript, where the best implementations live, and pay
 
 ### A JavaScript function as a Ruby method
 
-The alternatives were tried or costed. A pure-Ruby port is the measurement above. A remote lookup service for the timezone and country half was written up as the removal path and parked. An embedded JavaScript engine was spiked and folded into the same parked plan. What shipped in April 2025, first for timezone and country lookups and then in July 2025 for astronomy, is a subclass of `Nodo::Core`:
+We tried or costed the alternatives. The pure-Ruby port is the measurement above. A remote lookup service for the timezone and country half was written up as the way to remove Node, then parked. An embedded JavaScript engine got a quick spike and was folded into the same parked plan. What shipped is a subclass of `Nodo::Core`, in April 2025 for timezone and country lookups and in July 2025 for astronomy:
 
 ```ruby
 # app/models/api/sources/secondary/astronomy_engine.rb (trimmed)
@@ -68,28 +68,28 @@ class AstronomyEngine
 end
 ```
 
-`require Astronomy: "astronomy-engine"` becomes a `const Astronomy = require("astronomy-engine")` inside the Node process. `function :data` defines a Ruby method of the same name. Calling it serializes the arguments to JSON, posts them over a Unix socket to a tiny HTTP server that Nodo runs inside Node, and parses the JSON that comes back. The second adapter is the same shape with two packages, `geo-tz` and `@rapideditor/country-coder`, and a `script` block that disables geo-tz's internal cache. Three packages total, and `package.json` lists nothing else.
+`require Astronomy: "astronomy-engine"` becomes `const Astronomy = require("astronomy-engine")` inside the Node process. `function :data` defines a Ruby method with the same name. When we call it, Nodo turns the arguments into JSON, posts them over a Unix socket to a tiny HTTP server it runs inside Node, and parses the JSON that comes back. The second adapter has the same shape with two packages, `geo-tz` and `@rapideditor/country-coder`, and a `script` block that turns off geo-tz's internal cache. That's three packages total, and `package.json` lists nothing else.
 
-The line to notice is `@_node ||= Node.new`. Nodo creates a JavaScript-side context for every Ruby instance and registers a finalizer to garbage-collect it. An adapter that instantiated its `Node` per request would churn contexts on both sides and lean on Ruby finalizers to clean up. One class-level singleton holds the bridge, and per-request state lives in the outer adapter object.
+The line to notice is `@_node ||= Node.new`. Nodo creates a JavaScript-side context for every Ruby instance and registers a finalizer to clean it up when Ruby garbage-collects the instance. If we created a `Node` per request, we'd churn contexts on both sides and depend on Ruby finalizers to clean up. So one class-level object holds the bridge, and per-request state lives in the outer adapter.
 
 ### One coarse call, not many fine ones
 
-Every call is a fresh HTTP request over the socket, JSON in both directions. That fixes the design of the boundary: the cost is per call plus per byte, so make few calls and keep the payloads small. The astronomy function computes nine fields in one round trip and returns a flat hash of scalars, rather than exposing nine functions the Ruby side would call one by one.
+Every call is a fresh HTTP request over the socket, with JSON in both directions. So the cost is per call plus per byte, and the design follows from that: make few calls and keep the payloads small. The astronomy function computes nine fields in one round trip and returns a flat hash of numbers and strings, instead of nine functions the Ruby side would call one at a time.
 
-Measured on a laptop today, with a no-op function and a 5,000-object array echoed back:
+We measured this on a laptop while writing the post, with a function that does nothing and one that echoes back an array of 5,000 small objects:
 
 | Call | Mean | p95 |
 |------|-----:|----:|
 | No-op round trip | 0.088 ms | 0.150 ms |
 | Echo 5,000 small objects | 1.877 ms | 2.094 ms |
 
-So the bridge's floor is under a tenth of a millisecond, and of the ~0.3 to 0.4 ms an astronomy call takes locally, most is V8 doing real work. Twenty times that floor is what a careless payload costs. The limit is that the coarse boundary has to be designed up front. There is no batching layer, and a JavaScript function that returns a large structure pays the JSON tax on every call.
+So the bridge's floor is under a tenth of a millisecond. An astronomy call takes about 0.3 to 0.4 ms locally, and most of that is V8 doing real work. A careless payload costs twenty times the floor. The limit is that you have to design the coarse boundary up front. There's no batching layer, and a JavaScript function that returns a big structure has to serialize all of it on every call.
 
 ### Why the hop beats in-process on a fiber server
 
-The intuition that a process boundary must be slower than a library call is right for a threaded server and wrong for this one. The Ruby port's 15 ms is CPU spent on the reactor thread, and while it runs no other fiber in that worker moves. The Nodo call's 0.3 ms is a socket write, a wait, and a socket read. The wait is the interesting part: does it block the reactor or yield to it?
+Most people assume a process boundary must be slower than a library call. That's right for a threaded server and wrong for this one. The Ruby port's 15 ms is CPU on the reactor thread, and while it runs, no other fiber in that worker moves. The Nodo call's 0.3 ms is a socket write, a wait, and a socket read. The question is the wait: does it block the reactor, or yield to it?
 
-The repository's own notes called the lookup "in-process, blocking". The check is cheap, so it was run rather than trusted. A JavaScript function that busy-loops for 500 ms, called from one fiber while a sibling fiber ticks every 50 ms:
+Our own notes in the repository called the lookup "in-process, blocking". Checking is cheap, so we checked instead of trusting the note. Here's a JavaScript function that busy-loops for 500 ms, called from one fiber while a sibling fiber ticks every 50 ms:
 
 ```ruby
 require "nodo"
@@ -116,15 +116,15 @@ puts ticks.inspect
 # => [51, 102, 153, 204, 255, "nodo returned at 500 ms"]
 ```
 
-The ticks land on schedule while Node is busy. Nodo's client is a `Net::HTTP` subclass talking to a `UNIXSocket`, and under Async that socket read goes through Ruby's fiber scheduler, so the calling fiber parks and the reactor serves everyone else. Nothing had to be wrapped in a thread. That is the mechanical reason the JavaScript engine survived and the Ruby one did not: the JavaScript call costs one fiber's wall time, and the Ruby call costs every fiber's CPU.
+The ticks land on schedule while Node is busy. Nodo's client is a `Net::HTTP` subclass talking to a `UNIXSocket`. Under Async, that socket read goes through Ruby's fiber scheduler, so the calling fiber parks and the reactor serves everyone else. We didn't have to wrap anything in a thread. This is why the JavaScript engine survived and the Ruby one didn't: the JavaScript call costs one fiber's waiting time, and the Ruby call costs every fiber's CPU.
 
-The limit is on the other side of the socket. Node is single-threaded too, so a slow JavaScript function serializes every other JavaScript call in that worker even though Ruby keeps moving. The bridge moves the CPU out of the reactor. It does not make it free.
+The limit is on the other side of the socket. Node is single-threaded too, so a slow JavaScript function makes every other JavaScript call in that worker wait, even though Ruby keeps moving. The bridge moves the CPU work out of the reactor, but the work still has to happen somewhere.
 
 ### What it costs, and the flags that did not help
 
-The bill is memory. A warm Node process holding the astronomy package is about 56 MB resident, grows to about 71 MB over the first few hundred calls, and does not shrink when Ruby garbage-collects, because it is V8's heap and not Ruby's. Loading the timezone and country packages into the same process adds about 15.6 MB. That is why the removal plan existed: on a dyno with a fixed memory quota, 70 MB of warm JavaScript is a real fraction of the budget.
+The cost is memory. A warm Node process holding the astronomy package uses about 56 MB, grows to about 71 MB over the first few hundred calls, and doesn't shrink when Ruby garbage-collects, because it's V8's heap and not Ruby's. Loading the timezone and country packages into the same process adds about 15.6 MB. That's why we had a plan to remove it: on a dyno with a fixed memory quota, 70 MB of warm JavaScript is a real share of the budget.
 
-The cheaper path was to tune V8 rather than remove it. A benchmark runs each flag set in an isolated Rails process and records the child's resident memory and per-call latency. Node's flags reach the child through one environment variable:
+The cheaper option was to tune V8 instead of removing it. We wrote a benchmark that runs each set of flags in its own Rails process and records the child's memory and per-call latency. Node's flags reach the child through one environment variable:
 
 ```ruby
 # config/initializers/nodo.rb
@@ -140,7 +140,7 @@ Rails.application.config.after_initialize do
 end
 ```
 
-The local matrix, on macOS with Node 25 and 40 iterations, ordered the options:
+The local run, on macOS with Node 25 and 40 iterations, ranked the options:
 
 | Flags | Node RSS | Mean | p95 |
 |-------|---------:|-----:|----:|
@@ -149,19 +149,19 @@ The local matrix, on macOS with Node 25 and 40 iterations, ordered the options:
 | `--max-old-space-size=128 --max-semi-space-size=1` | 64.2 MB | 0.58 ms | 1.02 ms |
 | both, plus `--jitless` | 54.6 MB | 3.05 ms | 4.33 ms |
 
-`--jitless` buys the most memory and was rejected on sight: a fivefold latency increase on a call that runs on nearly every request. The old-space cap went to production as a canary and was rolled back after router p95 and p99 during a traffic spike jumped to 1,530 and 1,617 ms with 48 server errors. The capacity skill now records it as "do not retry in production without a controlled retest". The only production-accepted flag is the semi-space cap, which trims about 6 MB and costs nothing measurable.
+`--jitless` saves the most memory, and we rejected it right away, because it makes a call that runs on nearly every request five times slower. The old-space cap went to production as a canary. During a traffic spike, router p95 and p99 jumped to 1,530 and 1,617 ms with 48 server errors, and we rolled it back. The capacity skill now records it as "do not retry in production without a controlled retest". The only flag that stayed in production is the semi-space cap, which trims about 6 MB and costs nothing we can measure.
 
-The limit of the benchmark is stated in the plan that recorded it: laptop numbers on a newer Node are good for ordering the options and useless for accepting them. The old-space cap looked free locally and failed under real traffic.
+The plan that recorded the benchmark also states its limit: laptop numbers on a newer Node can rank the options but can't accept one. The old-space cap looked harmless locally and failed under real traffic.
 
 ### The rules for a child process on the request path
 
-A child process on the hot path needs rules that an in-process library does not. Each of these was added after it bit.
+A child process on the request path needs rules that an in-process library doesn't. We added each of these after it bit us.
 
-**Warm it at boot.** Nodo spawns the child lazily on first use, and the first request paid the spawn plus package load, which could push it past the whole-request timeout the server enforces at 10 seconds. The `warmup` class method above instantiates the singleton during boot, and with the platform's preboot feature the new dyno is warm before traffic reaches it. Landed February 2026.
+**Warm it at boot.** Nodo spawns the child on first use, so the first request paid for the spawn and the package load. That could push it past the 10-second timeout the server puts on a whole request. The `warmup` class method above creates the shared `Node` object during boot, and with the platform's preboot feature the new dyno is warm before traffic reaches it. This landed in February 2026.
 
-**Set the timeout for a request path.** Nodo's default is 60 seconds, which is a reasonable default for a build script and a hang for a web request. The initializer sets 2 seconds.
+**Set a timeout sized for a request.** Nodo's default is 60 seconds. That's fine for a build script and a hang for a web request. The initializer sets 2 seconds.
 
-**Let the platform's shutdown signal reach the child.** Nodo registers an `at_exit` hook that sends SIGTERM to the Node process and waits for it. That hook only runs if Ruby exits normally. The server's preload script is one line before the app loads:
+**Let the platform's shutdown signal reach the child.** Nodo registers an `at_exit` hook that sends SIGTERM to the Node process and waits for it. That hook only runs if Ruby exits normally. Our server's preload script has one line before the app loads:
 
 ```ruby
 # preload.rb
@@ -170,34 +170,34 @@ Signal.trap("TERM") { Process.kill("INT", $$) }
 require_relative "config/environment"
 ```
 
-The platform stops dynos with SIGTERM. Translating it to SIGINT lets Falcon unwind the way it expects to, so `at_exit` runs and the child is reaped instead of orphaned.
+The platform stops dynos with SIGTERM. Turning it into SIGINT lets Falcon shut down the way it expects to, so `at_exit` runs and the child is killed instead of left running.
 
-**Do not rescue what has never failed.** A pull request proposed rescuing bridge failures into a silent metric-only fallback. It was closed. The path is local, in-process, and had never been observed failing in production, so a rescue would only hide the first real failure. The error-reporting middleware already captures a raise.
+**Don't rescue what has never failed.** A pull request proposed catching bridge errors and falling back to a metric with no report. We closed it. The path is local, on the same dyno, and we've never seen it fail in production, so a rescue would only hide the first real failure. The error-reporting middleware already catches a raise.
 
-**Symlink `node_modules` with `-sfn` in a worktree.** Nodo resolves `./node_modules` relative to the working directory, so a fresh git worktree needs a link to the main checkout's packages. A plain `ln -s` into a directory that already has one silently creates a self-referencing `node_modules/node_modules` and corrupts the next npm run. The symptom is `Cannot find module 'geo-tz/now'` and the fix is in the repo's worktree checklist.
+**Symlink `node_modules` with `-sfn` in a worktree.** Nodo looks for `./node_modules` in the working directory, so a fresh git worktree needs a link to the main checkout's packages. A plain `ln -s` into a directory that already has the link quietly creates a nested `node_modules/node_modules` and breaks the next npm run. The symptom is `Cannot find module 'geo-tz/now'`, and the fix is in the repo's worktree checklist.
 
 ### One child per process, or per dyno
 
-Nodo's process state is class-level: `@@node_pid`, `@@tmpdir`, and a mutex live on `Nodo::Core`, so every subclass in a Ruby process shares one Node child. That is why the second package cost 15.6 MB of data and not a second runtime. It also raises the forking question: with the server running several Ruby workers, is there one Node per worker or one per dyno?
+Nodo keeps its process state at the class level. `@@node_pid`, `@@tmpdir`, and a mutex live on `Nodo::Core`, so every subclass in a Ruby process shares one Node child. That's why the second package cost 15.6 MB of data and not a second runtime. It also raises a question about forking: when the server runs several Ruby workers, is there one Node per worker or one per dyno?
 
-Reading the code, the answer depends on when the child is spawned. Falcon's service preloads `preload.rb` in the controlling process before it forks workers. The preload loads the Rails environment, the initializer's warmup runs in production, and the Node child is spawned there. Forked workers inherit the pid, the socket path, and the already-defined class, so what the code implies is one Node child per dyno, shared by every worker through the socket. That has not been verified on a dyno, and it is moot today because the worker count dropped from two to one in May 2026. The planning model that motivated the removal effort assumed one runtime per worker, and if the shared-child reading is right that model overstated the memory by half at two workers. Verify before reasoning from either number.
+Reading the code, it depends on when the child is spawned. Falcon's service loads `preload.rb` in the controlling process before it forks workers. The preload loads the Rails environment, the warmup in the initializer runs in production, and that's where the Node child is spawned. Forked workers inherit the pid, the socket path, and the class that's already defined. So the code implies one Node child per dyno, shared by every worker through the socket. We haven't verified that on a dyno, and it doesn't matter today because the worker count dropped from two to one in May 2026. The planning model behind the removal effort assumed one runtime per worker. If the shared-child reading is right, that model counted twice the memory at two workers. Check before you reason from either number.
 
-Sharing on purpose is a different matter. A spike in May 2026 tried pre-fork sharing explicitly and found it "partially works": a forked worker can call the parent's child, and the failure is shutdown ownership. Forked children inherit Nodo's `at_exit` cleanup, so a worker that exits kills the shared process and removes the socket, leaving the parent broken. That is the open upstream request, mtgrosser/nodo issue 17, and the maintainer's reply names the same problem: the socket can be shared, the shutdown cannot. The spike was parked as documentation only, with no runtime change.
+Sharing on purpose is a different matter. A spike in May 2026 tried sharing the child across forks deliberately and found it "partially works". A forked worker can call the parent's child. The problem is who owns shutdown. Forked workers inherit Nodo's `at_exit` cleanup, so a worker that exits kills the shared process and removes the socket, and the parent is left broken. That's the open upstream request, mtgrosser/nodo issue 17, and the maintainer's reply names the same problem: the socket can be shared, but the shutdown can't. We parked the spike as documentation only, with no runtime change.
 
 ## Results
 
-- The JavaScript engine stayed and the Ruby port went back to development and test after two days. Per-call cost on the serving path is about 0.3 ms out of process versus 15.4 ms in process.
-- The bridge's own overhead measured at 0.088 ms per call, and the socket wait yields to the fiber reactor, so a call parks one fiber instead of stalling the worker.
-- The cost that stays is 56 to 71 MB of resident Node memory per child, trimmed by about 6 MB with the one accepted V8 flag. Removing the runtime is a parked plan, reopened only for a CPU-safe replacement.
-- Two flag experiments were rejected, one locally on latency and one in production on spike-window p95, and both are recorded so they are not retried by accident.
+- The JavaScript engine stayed, and after two days the Ruby port went back to development and test only. A call on the serving path costs about 0.3 ms out of process versus 15.4 ms in process.
+- The bridge's own overhead is 0.088 ms per call, and the socket wait yields to the fiber reactor, so a call parks one fiber instead of stalling the worker.
+- The cost that stays is 56 to 71 MB of Node memory per child, trimmed by about 6 MB with the one V8 flag we kept. Removing the runtime is a parked plan, and we'd only reopen it for a replacement that doesn't cost Ruby CPU.
+- We rejected two flag experiments, one locally for latency and one in production for p95 during a spike, and recorded both so nobody retries them by accident.
 
 ## Lessons Learned
 
-- On a fiber server, an out-of-process call that yields is cheaper than in-process CPU. Measure the wait, not the hop.
-- Design a bridge boundary as one coarse call returning scalars. Per-call and per-byte costs are the whole price.
-- A child process on the request path needs a warmup, a request-sized timeout, and a shutdown path that reaches it.
-- Read the concurrency claim in your own notes with suspicion. "Blocking" was wrong and a 20-line script settled it.
-- Laptop benchmarks order options. Only a production canary with guardrails accepts one.
+- On a fiber server, an out-of-process call that yields is cheaper than CPU in the process. Measure whether the wait yields, not how long the hop takes.
+- Design a bridge boundary as one coarse call that returns plain values. The price is per call and per byte, so keep both down.
+- A child process on the request path needs a warmup, a timeout sized for a request, and a shutdown signal that reaches it.
+- Don't trust the concurrency claim in your own notes. Ours said "blocking", it was wrong, and a 20-line script settled it.
+- A laptop benchmark can rank options. Only a production canary with guardrails can accept one.
 
 ---
 
@@ -212,3 +212,25 @@ Sharing on purpose is a different matter. A spike in May 2026 tried pre-fork sha
 Generated by Claude Fable 5.1 using the blog-post-generator skill. One agent researched Nodo across the web repository and a second wrote the post, re-running the fiber-yield and round-trip measurements before making either claim (Ruby 3.4.9, Node 26.5.0, nodo 1.8.2, async 2.44.0, on a laptop). Sources: `app/models/api/sources/secondary/astronomy_engine.rb` and `geo_tz.rb`, `config/initializers/nodo.rb`, `preload.rb`, `package.json`, `scripts/benchmark/nodo_memory_probe.rb` and its local result files, the astronomy backend, astronomy caching, and Nodo removal plans, the capacity and error-reporting skills, the nodo gem source (`core.rb`, `client.rb`), the async-service and falcon gem sources for preload ordering, and the commits for the April 2025 adoption, the February 2026 warmup, the May 2026 swap, rollback, flag configuration, and parked fork spike.
 
 Judgment calls: the astronomy adapter excerpt is trimmed to the pattern with a comment marking the omitted fields, and the outer class name is shortened. The three npm packages are named because they are public and the point of the post; weather vendors, the timezone fallback chain, dyno formation history, and prices are not. The bridge-overhead numbers are this session's measurements rather than the researcher's earlier ones (0.098 ms and 1.35 ms), which were consistent. The "one child per dyno" reading is stated as what the code implies with an explicit unverified caveat, since checking it would mean touching production.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 3, run after batch 2 (#69) merged. Rewrote the prose in first person with contractions, cut the three retired phrases, and defined "ephemeris" at first use. One judgment call: the "don't rescue" rule described the bridge path as "local, in-process", which contradicts the post's own point that the bridge runs out of process, so it now says "local, on the same dyno"; code, numbers, quoted text, and links are unchanged. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Prompt 9:** "usage looks fine, merge it and run batch 2"
+
+**Prompt 10:** "usage is fine, please continue -- one more thing -- at the end (or perhaps with future batches?) I'd like to change the "How This Post Was Made" sections in all posts to not have the prompt in the post itself, rather, the prompts should be moved into PR body if editable, or comments, then the "How This Post Was Made" can have the last edit date and a link to the Pull Requests / Prompts -- then there's less cruft at the end for readers that just want to copy paste a post into their agent -- wdyt?"
