@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Move each post's "How This Post Was Made" section into _prompts/<slug>.md and
 record model, last_edited, and last_edited_by in the post's front matter. The post
-layout renders the footer from those fields. Idempotent: skips posts already moved.
+layout renders the subheader from those fields. Idempotent: skips posts already moved.
 Usage: bin/move-prompts [repo-root]"""
 import os, re, sys, glob
 

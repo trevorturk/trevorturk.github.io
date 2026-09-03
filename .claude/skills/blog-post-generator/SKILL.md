@@ -109,9 +109,9 @@ The first plain draft of that paragraph was still not there. It read "Not every 
    - Include frontmatter (title, date with timestamp, summary, tags, model, last_edited, last_edited_by)
    - **Use timestamps** for proper ordering: `date: YYYY-MM-DD HH:MM:SS -0600`
    - Follow the template structure below and the Voice and Structure rules above
-   - The post body ends with Lessons Learned (or the last body section). No meta section in the post; the layout renders the footer from front matter.
+   - The post body ends with Lessons Learned (or the last body section). No meta section in the post; the layout renders the subheader from front matter.
 
-4. **Write the prompts file** at `_prompts/<slug>.md` (same slug as the post filename without the date). It holds the prompts verbatim and a short process note, and it is rendered at `/prompts/<slug>/`, linked from the post footer. See the template below.
+4. **Write the prompts file** at `_prompts/<slug>.md` (same slug as the post filename without the date). It holds the prompts verbatim and a short process note, and it is rendered at `/prompts/<slug>/`, linked from the post subheader. See the template below.
 
 5. **Check before the PR**: read the draft against Voice and Structure, run `bin/verify-post --new _posts/<file>.md` for the register and sentence report, then `bundle exec jekyll build`.
 
@@ -162,7 +162,7 @@ What changed and what it cost. Three or four bullets.
 
 ```
 
-The front matter also carries `model: "Claude Fable 5.1"` (the model that wrote the post), `last_edited: YYYY-MM-DD` (the post date, until a pass changes it), and `last_edited_by: "Claude Fable 5.1"`. The post layout renders a How This Post Was Made footer from those fields with links to the prompts page and the file's commit history, so the post body carries no meta section.
+The front matter also carries `model: "Claude Fable 5.1"` (the model that wrote the post), `last_edited: YYYY-MM-DD` (the post date, until a pass changes it), and `last_edited_by: "Claude Fable 5.1"`. The post layout renders a one-line subheader under the title from those fields ("Written by MODEL on DATE, last edited DATE · History · Prompts"), so the post body carries no meta section.
 
 The prompts file, `_prompts/<slug>.md`:
 
