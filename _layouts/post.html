@@ -3,12 +3,8 @@ layout: default
 ---
 <article>
   <h1>{{ page.title }}</h1>
+  {% assign posted = page.date | date: "%Y-%m-%d" %}
+  <p class="post-meta">Written{% if page.model %} by {{ page.model }}{% endif %} on {{ posted }}{% if page.last_edited and page.last_edited != posted %}, last edited{% if page.last_edited_by and page.last_edited_by != page.model %} by {{ page.last_edited_by }} on{% endif %} {{ page.last_edited }}{% endif %} · <a href="https://github.com/trevorturk/trevorturk.github.io/commits/main/{{ page.path }}">History</a> · <a href="/prompts/{{ page.slug }}/">Prompts</a></p>
 
   {{ content }}
-
-  <hr>
-
-  <h2 id="how-this-post-was-made">How This Post Was Made</h2>
-  {% assign posted = page.date | date: "%Y-%m-%d" %}
-  <p class="post-meta">First posted{% if page.model %} by {{ page.model }}{% endif %} on {{ page.date | date: "%B %-d, %Y" }}{% if page.last_edited and page.last_edited != posted %}, last edited{% if page.last_edited_by %} by {{ page.last_edited_by }}{% endif %} on {{ page.last_edited | date: "%B %-d, %Y" }}{% endif %}. View: <a href="/prompts/{{ page.slug }}/">prompts</a>, <a href="https://github.com/trevorturk/trevorturk.github.io/commits/main/{{ page.path }}">history</a>.</p>
 </article>

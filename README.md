@@ -32,7 +32,7 @@ last_edited_by: "Claude Fable 5.1"
 ---
 ```
 
-The prompts and process notes behind a post go in `_prompts/title.md`, rendered at `/prompts/title/` and linked from the post's footer.
+The prompts and process notes behind a post go in `_prompts/title.md`, rendered at `/prompts/title/` and linked from the subheader under the post title.
 
 Or use the `blog-post-generator` skill with Claude Code to generate posts automatically. The `post-ideas` skill researches the Hello Weather repos for candidate topics.
 
