@@ -2,35 +2,35 @@
 layout: post
 title: "Store Listings Are ASO, Not Translation"
 date: 2026-08-24 09:50:00 -0600
-summary: "Per-locale store listings kept in git and pushed to App Store Connect as reviewed diffs, written as App Store Optimization per market rather than a literal translation of the English."
+summary: "We keep one App Store listing per storefront in git, push changes as reviewed diffs, and write each one for its market's search terms instead of translating the English."
 tags: [workflow, localization, i18n, app-store]
 ---
 
 ## The Problem
 
-The app soft-launched in 26 new languages and the storefronts did not follow. The store listing had been left in English on purpose, and a check of the storefronts showed how thin it was: the Japanese storefront showed an English description under no subtitle at all, and Germany and France appeared to carry one-word subtitles. When we pulled the live listing down, the app info and every recent version carried exactly one localization, the one-word subtitles turned out to be the storefront's own category labels, and every other storefront fell back to the English.
+The app soft-launched in 26 new languages, and the App Store pages didn't follow. We'd left the listing in English on purpose. When we looked at a few storefronts, the Japanese one showed an English description with no subtitle at all, and Germany and France seemed to have one-word subtitles. Then we pulled the live listing down. The app info and every recent version had one localization, English. The one-word subtitles were the store's own category labels. Every other storefront was falling back to the English.
 
-The store listing is not part of the app. It lives in App Store Connect, in its own data model: name, subtitle, keywords, description, promotional text, and the "What's New" notes on each version. None of it comes from the string catalog, so translating the binary never touches it. Localizing [Hello Weather](https://helloweather.com) into 26 languages meant standing up roughly 26 storefront listings that did not exist yet, not editing ones that did.
+The store listing isn't part of the app. It lives in App Store Connect as its own set of fields: name, subtitle, keywords, description, promotional text, and the "What's New" notes on each version. None of that comes from the app's string catalog, so translating the app doesn't touch it. Localizing [Hello Weather](https://helloweather.com) into 26 languages meant creating roughly 26 listings that didn't exist yet, not editing ones that did.
 
-The tempting move treats that as a translation job: hand the English listing to a translator and paste the results into 26 fields. A store listing is a ranked, indexed marketing surface, and each storefront ranks it against search terms typed by people in a different market. A subtitle that is the best English phrasing, translated word for word, lands in a storefront optimized for nothing anyone there searches for. The words come back correct and the listing still loses, because correctness was never the metric.
+The obvious approach is to treat that as a translation job: hand the English listing to a translator and paste the results into 26 sets of fields. But the store indexes the listing for search, and each storefront ranks it against what people in that country type. A subtitle that works well in English, translated word for word, ends up matching nothing anyone there searches for. The words can be right and the listing still ranks badly, because the store scores search matches, not accuracy.
 
-This is the same shape as the [App Store pricing problem](/appstore-pricing/): a field that looks like one value is really a per-territory decision, and doing it by hand in the web UI is slow, unreviewable, and wrong in ways you cannot see.
+We'd hit the same problem with [App Store pricing](/appstore-pricing/). A field that looks like one value is really a decision per territory, and editing it by hand in the web UI is slow, nobody reviews it, and you can't see what's wrong.
 
 ## The Solution
 
-Treat store metadata as an App Store Optimization program run per storefront. Three parts:
+We treat the store listing as App Store Optimization, meaning copy written to rank in each storefront's search, and we run it per storefront. Three parts:
 
-1. **A per-locale file in version control is the source of truth** for every listing field, one file per storefront.
-2. **A CLI pulls, diffs, and pushes** those files against App Store Connect, so every change to a live listing is a reviewed diff rather than a form edit nobody saw.
-3. **Two human gates stay manual and nothing else does.** The English master is signed off before any fills are drafted, and every push goes out as a reviewed diff.
+1. **One file per storefront in git** holds every listing field for that storefront.
+2. **A command-line tool pulls, diffs, and pushes** those files to App Store Connect, so every change to a live listing is a diff someone read, not a form edit nobody saw.
+3. **Two steps stay manual.** We sign off the English master before the model drafts the per-market listings, and we read every push preview before applying it.
 
-The listings are model-drafted, which is only safe because both gates and the whole change history ride git. Everything a human needs to catch a bad listing is a `git diff` or a `push` preview away.
+A model drafts the listings. That's safe because the change history is in git and a person reads both gates. To catch a bad listing, you run `git diff` or the `push` preview.
 
 ### The listing is marketing copy, not a string table
 
-App strings are *translated*; the store listing is *rewritten per market*. Miss that distinction and you waste the highest-value field on the page. The subtitle is, after the name, the second-most-weighted field the App Store indexes for search, so a literal rendering of an English tagline throws that weight away. Each storefront instead gets a subtitle and keyword field chosen for the terms people there actually type. The name stays the brand in every storefront so far; a localized name per market is an open decision. The description carries no search weight and is pure conversion, so it is re-flowed from the approved English.
+App strings get translated. The store listing gets rewritten for each market. The subtitle is the second-most-weighted search field after the name, so a word-for-word translation of the English tagline wastes it. Each storefront gets a subtitle and keyword list chosen for the terms people there actually type. The name stays the brand name in every storefront so far; whether to localize it is still an open question. The description carries no search weight and only has to persuade someone who's already on the page, so we rework it from the approved English.
 
-The source of truth is one YAML file per storefront under `config/appstore/metadata/`, 28 of them: `en-CA.yml` as the English master, then `de-DE.yml`, `ja.yml`, and the rest. Each holds the app-info and version fields for that storefront. The limits live in the CLI's validator and run before any push, so they shape the copy instead of surprising it at submission. The files themselves carry no comments, because `pull` regenerates them; the limits are annotated here for reading:
+Each storefront has one YAML file under `config/appstore/metadata/`, 28 in all: `en-CA.yml` is the English master, then `de-DE.yml`, `ja.yml`, and the rest. Each file holds the app-info and version fields for that storefront. The field limits live in the tool's validator, which runs before any push, so we find out about an over-long field before submission instead of at it. The files themselves have no comments, because `pull` regenerates them. The limits are written in as comments here so you can read them:
 
 ```yaml
 # config/appstore/metadata/de-DE.yml — one storefront.
@@ -50,11 +50,11 @@ version:
   marketing_url: "https://example.com"
 ```
 
-`keywords` is measured in bytes, so a multibyte language gets far fewer keywords per storefront than English does. Putting the file in git is the quiet win. A listing becomes a reviewable artifact with a history: who changed the German subtitle and when, a diff between two versions, a revert of a bad one. The web UI offers none of that.
+`keywords` is measured in bytes, so a language with multibyte characters fits far fewer keywords than English does. Keeping the file in git is the part that matters most. A listing gets a history: who changed the German subtitle and when, a diff between two versions, a way to revert a bad one. The web UI has none of that.
 
 ### Every change to a live listing is a reviewed diff
 
-A listing edited in a web form leaves no history, no review, and no way to tell whether the repo and the store agree. The CLI's three verbs have the same shape as `git`, in the order a release runs them:
+The tool has three commands, shaped like `git`, listed here in the order a release runs them:
 
 ```bash
 bin/appstore metadata pull                 # overwrite local files from the live listing
@@ -63,9 +63,9 @@ bin/appstore metadata push                 # preview every pending change (write
 bin/appstore metadata push --apply         # write the reviewed changes to App Store Connect
 ```
 
-`pull` overwrites the local files from what is live, so a `git status` afterward shows whether the repo and the store have drifted. `diff` shows how the local files differ. `push` previews by default and writes only with `--apply`.
+`pull` overwrites the local files with what's live, so `git status` afterward shows whether the repo and the store have drifted apart. `diff` shows how the local files differ from live. `push` previews by default and only writes with `--apply`.
 
-The manager behind those verbs is small. It maps YAML keys to App Store Connect attributes, validates every field against the limits, and, on `--apply`, updates the storefronts that exist and creates the ones that do not. The review trick is in `diff`: a short field prints old and new values inline, but a long field prints only a character count, because a 4,000-character description dumped in full twice is not reviewable. The block below is a simplified version that runs against a stubbed client on its own; the real manager splits app-info and version fields across two App Store Connect resources, which is left out here. The create path in `push` is what stood up the roughly 26 net-new listings:
+The manager behind those commands is small. It maps YAML keys to App Store Connect attributes and checks every field against the limits. On `--apply`, it updates the storefronts that exist and creates the ones that don't. `diff` prints a short field's old and new values inline, but for a long field it prints only the character counts, because nobody can review a 4,000-character description printed twice. The block below is simplified and runs on its own against a stub client. The real manager splits app-info and version fields across two App Store Connect resources, which we've left out. The create path in `push` is how we stood up the roughly 26 new listings:
 
 ```ruby
 FIELDS      = %i[name subtitle keywords description promotional_text whats_new].freeze
@@ -152,15 +152,15 @@ local = {
 MetadataManager.new(local: local, apply: false).push   # de-DE has no live row: previews as net-new
 ```
 
-Run it and `de-DE` previews as a new locale with every field listed, while `en-CA` shows only its changed fields inline. The two human gates sit around this machinery. The first exists because translated copy is keyed off the English: approve the master once, and the 26 fills are drafted against final wording. The second gate is the `push` preview itself, read and approved before `--apply` touches a live storefront.
+Run it and `de-DE` previews as a new locale with every field listed, while `en-CA` shows only the fields that changed. The two manual gates sit on either side of this. The first is signing off the English master, because every per-market listing is drafted from it. Approve the English once, and the 26 per-market listings are drafted against final wording. The second gate is reading the `push` preview before `--apply` touches a live storefront.
 
-### Field limits are release-cadence rules, not just size caps
+### Each field limit also says when the field can change
 
-Each limit also decides *when* a field can change, so encoding it up front is cheaper than a rejected submission. Promotional text (170 characters) is the only field editable on a live listing at any time, so it carries a seasonal or between-release line without a submission. Name and subtitle are submission-gated, so a subtitle rotation has to ride a release train. Description, keywords, and What's New open and close with it. Copy written against those rules ships on the right cadence instead of waiting for a window that already closed.
+Each field has a rule about *when* it can change, not just how long it can be. Promotional text (170 characters) is the only field you can edit on a live listing at any time, so that's where a seasonal line or a between-release note goes. Name and subtitle can only change with a submission, so a new subtitle has to wait for a release. Description, keywords, and What's New change with a release too. If you know that before writing, you put each line in a field that can change when you need it to.
 
-### Release notes and screenshots ride the same rails
+### Release notes and screenshots go the same way
 
-Two more surfaces are localizable. The first, release notes, already rides this system. The in-app changelog is fully localized: every entry's date and content go through the same `localized(_:)` helper, so the "what changed" screen renders in the reader's language. A trimmed version of that view, with the Markdown rendering and styling left out:
+Two more things need localizing: release notes and screenshots. Release notes already go through this system. The in-app changelog is localized: every entry's date and content go through the same `localized(_:)` helper, so the "what changed" screen shows up in the reader's language. Here's a trimmed version of that view, with the Markdown rendering and styling left out:
 
 ```swift
 import SwiftUI
@@ -208,25 +208,25 @@ struct ChangelogView: View {
 }
 ```
 
-Notice that both the date and the content run through `localized(_:)`, so the entry is copy like any other rather than a hardcoded English string. The store's "What's New" is that same content on a different surface, so it lives in the metadata YAML and pushes on the same rails. At release time the tooling sets the primary-locale What's New straight from the changelog entry, whose `- Verb …` wording already fits the field. One release note, written once, reaches the in-app screen and 28 storefronts.
+Notice that the date goes through `localized(_:)` too, not just the content, so the whole entry is translatable copy rather than a hardcoded English string. The store's "What's New" is the same text in a different place, so it lives in the metadata YAML and pushes with everything else. At release time the tooling copies the changelog entry straight into the primary locale's What's New; the `- Verb …` wording already fits the field. We write one release note and it reaches the in-app screen and 28 storefronts.
 
-The second surface is screenshots, and that half is designed but not built as of September 2026. Adding a language to a listing defaults its screenshots to the primary language, so screenshots never blocked the locale push. The plan keeps design and localization as separate steps: a designer builds the frame, ground, and typography once, and a store tile's headline is a localized layer composited over the captured screenshot at build time, never baked into the design asset, so a headline rewrite or a new language re-renders the text layer without going back to design.
+Screenshots are designed but not built as of September 2026. When you add a language to a listing, its screenshots default to the primary language's, so screenshots never held up the push. The plan keeps design and localization separate. A designer builds the frame, background, and typography once. The headline on each store image is a localized text layer laid over the captured screenshot at build time, not baked into the design file, so a new headline or a new language re-renders the text without going back to the designer.
 
-One sequencing decision made all of this safe. The languages shipped quietly first, behind an opt-in picker with a translation-feedback button, and the marketing that points people at a storefront waited until customers had exercised the language in the wild. The store's own language list and the string catalog report which languages are *declared*, not which have launched, so a language is announced only once it has been exercised. The [support inbox](/support-inbox-as-telemetry/) is the QA channel for that wait.
+One ordering decision made the rest safe. The languages shipped quietly first, behind an opt-in picker with a translation-feedback button. Marketing that points people at a storefront waited until real customers had used the language. The store's language list and the string catalog only say which languages are *declared*, not which ones work, so we announce a language only after people have used it. During that wait, the [support inbox](/support-inbox-as-telemetry/) is where the bugs come in.
 
 ## Results
 
-- **28 per-locale listing files under version control**, so a listing can be diffed, reviewed, and rolled back. The 26 storefronts that had been falling back to one primary-language listing were stood up through the CLI's create path.
-- **Every push to a live listing is a reviewed diff.** `pull` makes drift between the repo and App Store Connect visible, and `--apply` is opt-in against a dry-run default.
-- **The release note is written once and lands in two places.** The in-app changelog and the per-locale What's New draw from one source, so they can no longer disagree.
-- **A paid post-editing vendor was retired** once the model plus the written rules matched its quality. What stays manual is the two gates: signing off the English master and reading the push preview.
+- **28 listing files in git**, one per storefront, so a listing can be diffed, reviewed, and rolled back. The 26 storefronts that had been falling back to English were created through the tool's create path.
+- **Every push to a live listing is a diff someone read.** `pull` shows drift between the repo and App Store Connect, and `push` is a dry run unless you pass `--apply`.
+- **The release note is written once and lands in two places.** The in-app changelog and the per-locale What's New come from the same text, so they can't disagree anymore.
+- **We dropped a paid post-editing vendor** once the model, working from the written rules, matched its quality.
 
 ## Lessons Learned
 
-- **Translate what is read; rewrite what is ranked.** A field scored by search is an optimization problem per market, and a faithful translation can be correct and still lose.
-- **Gate on the source text before fanning out.** Every derived value is keyed to the exact source, so an edit after the fills exist means reworking every fill to match.
-- **Measure a limit in the platform's unit.** A byte cap on keywords favors native terms that fit over a translated English list that will not.
-- **Declared is not launched.** Market a storefront only after real users have exercised its language, and treat the support inbox as the test suite until then.
+- **Rewrite any field the store ranks by search, one market at a time.** Translating it faithfully gives you correct words that don't match what people there search for.
+- **Sign off the source text before drafting the other languages.** Every per-market listing is drafted from it, so an edit afterward means reworking all of them.
+- **Check limits in the platform's unit.** The keyword cap is in bytes, so native terms that fit beat a translated English list that doesn't.
+- **A declared language isn't a launched one.** Market a storefront only after real users have used its language, and treat the support inbox as the test suite until then.
 
 ---
 
@@ -239,3 +239,21 @@ Research by eight Claude agents across the iOS, web, and blog repos (string cata
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the flat German ranking and the English Japanese storefront instead of on how much text the app carries, the title dropped from twelve words to six, and the market-versus-translation, source-gate, and byte-limit arguments are each stated once, in the body or in Lessons Learned but not both. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The opening now describes what the storefront check and the first `pull` actually found (an English-only listing, category labels mistaken for subtitles) instead of an unsupported flat German ranking; the limits are described as living in the CLI's validator rather than in the YAML files, which carry no comments, and the YAML excerpt gained the real `locale` and `privacy_choices_url` keys and the 2–30 name range; the Ruby excerpt now takes `apply` in the constructor and prints "Would update" like the real manager, and is labeled as simplified; the Swift excerpt uses the real `LocalizedStringResource` helper, the `ChangelogEntryData` record with `date`, `version`, and `content`, and the changelog's exact wording; the name is described as unlocalized so far, the screenshot compositor as planned rather than built, and the source-gate lesson as reworking the fills rather than discarding them.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 1, run after the pilot (#67) merged. The opening now tells what we found in one step per sentence, "surface" is gone from four places, App Store Optimization is defined where it first appears, the per-market listings are called that throughout instead of "fills", "the CLI" is "the tool", and the Results bullet that repeated the two manual gates was cut. Judgment calls: two `###` headings ("release-cadence rules", "ride the same rails") were reworded in plain words, "ground" in the screenshot plan became "background", and the Lessons bullets lost their maxim form. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
