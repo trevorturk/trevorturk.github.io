@@ -4,6 +4,9 @@ title: "Closing the Loop on Translation Bugs"
 date: 2026-08-24 09:40:00 -0600
 summary: "We ship 27 languages and can't proofread most of them, so the customers find the translation bugs. A feedback button, an inbox that computes who's waiting, a grep for the quoted string, and a person reading every draft before it's sent turn one bug report into a shipped fix and a reply."
 tags: [workflow, ai-agents, localization, i18n]
+model: "Claude"
+last_edited: 2026-09-03
+last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
@@ -213,35 +216,3 @@ A related rule covers replies to App Store reviews. An app can list 27 languages
 - **Compute any status a person would have to keep up to date.** If the answer is already in timestamps you record, work it out on every read. A stored flag goes stale the first time someone forgets it.
 - **A file the build regenerates is a file the build can shrink.** Diff it after every rebuild and treat deleted lines as a reason to stop, not as cleanup.
 - **Put the confirmation where the judgment happens, and nowhere else.** A prompt that repeats a choice already made teaches the person to click through prompts.
-
----
-
-## How This Post Was Made
-
-**Prompt:** "dispatch research into web/ios about how to ios/web handles localization, including developer tooling, snapshot testing, space-constrained date formats, artifact generation for review, email tooling for support workflows with translation bugs, anything else you can find that's relevant to localization work in ios/web. I'd like an ELI5 explainer that's very brief that I can share via email … I'd also like you to dispatch research into the blog repo to make sure we're covering all of the localization related topics as individual blog posts … then agents to draft the new blog posts …"
-
-Research by eight Claude agents across the iOS, web, and blog repos (string catalog, date rulebook, width and snapshot tooling, QA artifacts, API localization, support tooling, cross-repo sync, and a coverage audit of the existing posts); this draft was written by a dedicated agent from that research plus the underlying source, tests, and skill files, then reviewed before publishing. A second pass rewrote each section to lead with the product reason before the mechanism and replaced trimmed fragments with self-contained code examples.
-
-**Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the kind of error a model makes and the owner cannot see rather than on how much text the app carries, the title is shortened, the spaced-hyphen clauses are split into sentences, Results names the allowlisted send as the cost, and Lessons Learned holds four rules that do not repeat a heading. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
-
-**Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The Ruby excerpt now says its address list is trimmed and that lowercasing happens at parse time, since the real constant carries more send-as aliases than the two shown. The String Catalog `state` paragraph was narrowed to what the source records: the runtime skip of a `new` row was observed on an English override row, not asserted for every language. The Swift excerpt, the `waiting?` and `effective_from_email` code, the SQL twin of the predicate, the `bin/gmail` commands, the allowlist, the three-drafts rule, and the 27-language count all matched.
-
-**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 2, run after batch 1 (#68) merged. The post now says "we" and "can't" where it said "the team" and "cannot", the four handoffs/links are called steps throughout (the ### headings too), "gloss" is defined at first use, "surfaces" became "turns up", and the closing lines on the computed queue, the shrinking catalog, and the one-star reviews were cut or made literal. One judgment call: "the wrong register" for a button verb became "the wrong tone", the ordinary word for the same thing. Code blocks, ## headings, numbers, links, the blockquote, and the earlier meta paragraphs are unchanged. Prompts, verbatim:
-
-**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
-
-**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
-
-**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
-
-**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
-
-**Prompt 5:** "go ahead and kick off the pilot PR"
-
-**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
-
-**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
-
-**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
-
-**Prompt 9:** "usage looks fine, merge it and run batch 2"

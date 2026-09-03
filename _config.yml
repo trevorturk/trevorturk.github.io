@@ -4,6 +4,12 @@ url: https://trevorturk.github.io
 author: Trevor Turk
 repository: trevorturk/trevorturk.github.io
 
+# The prompts, process notes, and edit history behind each post, rendered at /prompts/<slug>/
+collections:
+  prompts:
+    output: true
+    permalink: /prompts/:name/
+
 # Build settings
 markdown: kramdown
 plugins:

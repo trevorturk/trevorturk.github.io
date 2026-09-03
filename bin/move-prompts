@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Move each post's "How This Post Was Made" section into _prompts/<slug>.md and
+record model, last_edited, and last_edited_by in the post's front matter. The post
+layout renders the footer from those fields. Idempotent: skips posts already moved.
+Usage: bin/move-prompts [repo-root]"""
+import os, re, sys, glob
+
+root = sys.argv[1] if len(sys.argv) > 1 else "."
+HEAD = "## How This Post Was Made"
+# Archive-wide passes and the model that ran them.
+PASS_MODEL = {"2026-09-01": "Claude Fable 5.1", "2026-09-03": "Claude Fable 5.1"}
+os.makedirs(os.path.join(root, "_prompts"), exist_ok=True)
+
+def split_fm(text):
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    return (m.group(1), text[m.end():]) if m else ("", text)
+
+def fm_get(front, key):
+    m = re.search(rf"^{key}:\s*(.+)$", front, re.M)
+    return m.group(1).strip() if m else ""
+
+moved = skipped = 0
+for path in sorted(glob.glob(os.path.join(root, "_posts", "*.md"))):
+    text = open(path).read()
+    fname = os.path.basename(path)
+    slug = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", fname)[:-3]
+    front, rest = split_fm(text)
+    if HEAD not in rest:
+        skipped += 1; continue
+    head_idx = rest.index(HEAD)
+    body = rest[:head_idx].rstrip("\n")
+    body = re.sub(r"\n---\s*$", "", body).rstrip("\n")
+    section = rest[head_idx + len(HEAD):].strip("\n")
+    title = fm_get(front, "title").strip('"')
+    date = fm_get(front, "date")[:10]
+    passes = re.findall(r"\*\*(?:Rewrite|Fact check|Editing pass) \((\d{4}-\d{2}-\d{2})\):\*\*", section)
+    last = max(passes + [date])
+    m = re.search(r"(?:Generated|Written|Drafted)(?: (?:by|with))? (Claude[^,;\n]*?)(?= using| with| via| from| and|\.(?:\s|$)|,|;)", section)
+    model = re.sub(r"\s+", " ", m.group(1).strip()) if m else ""
+    model = re.sub(r"^Claude \((.+)\)$", r"Claude \1", model)
+    if model.lower().startswith("claude code"):
+        model = ""
+    if not model and "Claude" in section:
+        model = "Claude"
+    last_by = model if last == date else PASS_MODEL.get(last, "")
+    extra = f'model: "{model}"\nlast_edited: {last}\nlast_edited_by: "{last_by}"\n'
+    open(path, "w").write(f"---\n{front}\n{extra}---\n{body}\n")
+    ptitle = title.replace('"', '\\"')
+    pfront = (f"---\nlayout: prompts\ntitle: \"{ptitle}\"\npost_url: /{slug}/\n"
+              f"post_date: {date}\nmodel: \"{model}\"\nlast_edited: {last}\nlast_edited_by: \"{last_by}\"\n---\n\n")
+    open(os.path.join(root, "_prompts", slug + ".md"), "w").write(pfront + section + "\n")
+    moved += 1
+print(f"moved {moved}, already moved {skipped}")

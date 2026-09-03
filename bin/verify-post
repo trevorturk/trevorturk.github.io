@@ -5,9 +5,10 @@
 # --new: a post not yet on main; skips the diff checks and prints only the register report.
 # PASS_DATE=YYYY-MM-DD: the date the Rewrite/Editing pass paragraph must carry (default: today).
 # Checks a revised post against main: fenced code blocks unchanged,
-# same ## headings in the same order, front matter date unchanged, and the
-# meta section still carries the original prompts. Then prints the prose word
-# count, retired-word hits, and sentences over 25 words. Exit 1 on any failure.
+# same ## headings in the same order, front matter date unchanged, and
+# _prompts/<slug>.md still carries the original prompts plus a pass paragraph
+# dated PASS_DATE, with last_edited set in both files. Then prints the prose
+# word count, retired-word hits, and sentences over 25 words. Exit 1 on any failure.
 set -uo pipefail
 ALLOW_CODE=0; ALLOW_LINKS=0; NEW=0; f=""
 for a in "$@"; do case "$a" in --allow-code-changes) ALLOW_CODE=1;; --allow-link-changes) ALLOW_LINKS=1;; --new) NEW=1;; *) f="$a";; esac; done
@@ -29,6 +30,12 @@ register() { # stdin: post text
 new="$(cat "$f")"
 if [ $NEW = 1 ]; then echo "new post: $(printf '%s\n' "$new" | register)"; exit 0; fi
 old="$(git show "main:$f")"
+slug="$(basename "$f" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')"
+pf="_prompts/$slug.md"
+[ -f "$pf" ] || { echo "FAIL: $pf missing"; exit 1; }
+pnew="$(cat "$pf")"
+# original prompt lines come from main's prompts file, or from main's post if it predates the move
+pold="$(git show "main:$pf" 2>/dev/null || printf '%s\n' "$old" | sed -n '/^## How This Post Was Made/,$p')"
 if [ $ALLOW_CODE = 0 ] && ! diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) >/dev/null; then
   echo "FAIL: code blocks differ from main"; diff <(printf '%s\n' "$old" | extract) <(printf '%s\n' "$new" | extract) | head -20; fail=1
 fi
@@ -38,12 +45,17 @@ fi
 if [ "$(printf '%s\n' "$old" | grep -m1 '^date:')" != "$(printf '%s\n' "$new" | grep -m1 '^date:')" ]; then
   echo "FAIL: date changed"; fail=1
 fi
-# every **Prompt...:** line from main must still be present verbatim
+# every **Prompt...:** line from main must still be present verbatim in the prompts file
 while IFS= read -r line; do
   [ -z "$line" ] && continue
-  if ! printf '%s\n' "$new" | grep -qF -- "$line"; then echo "FAIL: original prompt line missing: ${line:0:80}..."; fail=1; fi
-done < <(printf '%s\n' "$old" | grep -E '^\*\*Prompt( [0-9]+)?:\*\*')
-if ! printf '%s\n' "$new" | grep -qE "^\*\*(Rewrite|Editing pass) \($PASS_DATE\):\*\*"; then echo "FAIL: no **Rewrite ($PASS_DATE):** or **Editing pass ($PASS_DATE):** paragraph"; fail=1; fi
+  if ! printf '%s\n' "$pnew" | grep -qF -- "$line"; then echo "FAIL: original prompt line missing from $pf: ${line:0:80}..."; fail=1; fi
+done < <(printf '%s\n' "$pold" | grep -E '^\*\*Prompt( [0-9]+)?:\*\*')
+if ! printf '%s\n' "$pnew" | grep -qE "^\*\*(Rewrite|Editing pass|Fact check) \($PASS_DATE\):\*\*"; then echo "FAIL: no **Rewrite ($PASS_DATE):**, **Editing pass ($PASS_DATE):**, or **Fact check ($PASS_DATE):** paragraph in $pf"; fail=1; fi
+for x in "$f" "$pf"; do
+  grep -q "^last_edited: $PASS_DATE\$" "$x" || { echo "FAIL: $x last_edited is not $PASS_DATE"; fail=1; }
+  grep -qE '^last_edited_by: ".+"$' "$x" || { echo "FAIL: $x has no last_edited_by"; fail=1; }
+done
+if printf '%s\n' "$new" | grep -q '^## How This Post Was Made'; then echo "FAIL: post still carries a How This Post Was Made section; it belongs in $pf"; fail=1; fi
 # links to other posts must survive
 [ $ALLOW_LINKS = 1 ] || for link in $(printf '%s\n' "$old" | grep -o '](/[a-z0-9-]*/)' | sort -u); do
   printf '%s\n' "$new" | grep -qF -- "$link" || { echo "FAIL: internal link dropped: $link"; fail=1; }

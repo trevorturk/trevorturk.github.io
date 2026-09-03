@@ -76,3 +76,5 @@ Following the "Post Your Prompts" philosophy:
 - Keep prompt text verbatim when possible
 - For a post revision, say in the summary what was held fixed (code blocks, dates,
   headings) and how it was verified (see `blog-post-generator` > Revising an Existing Post)
+- The prompts in the PR body are the same ones recorded in `_prompts/<slug>.md`; the PR is
+  the second copy, not the only one

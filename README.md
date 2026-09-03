@@ -26,8 +26,13 @@ title: "Your Title"
 date: YYYY-MM-DD HH:MM:SS -0600
 summary: "A brief summary for the index page."
 tags: [tag1, tag2]
+model: "Claude Fable 5.1"
+last_edited: YYYY-MM-DD
+last_edited_by: "Claude Fable 5.1"
 ---
 ```
+
+The prompts and process notes behind a post go in `_prompts/title.md`, rendered at `/prompts/title/` and linked from the post's footer.
 
 Or use the `blog-post-generator` skill with Claude Code to generate posts automatically. The `post-ideas` skill researches the Hello Weather repos for candidate topics.
 

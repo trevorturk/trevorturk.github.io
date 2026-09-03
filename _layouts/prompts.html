@@ -1,0 +1,10 @@
+---
+layout: default
+---
+<article>
+  <h1>How This Post Was Made</h1>
+  {% assign posted = page.post_date | date: "%Y-%m-%d" %}
+  <p class="post-meta"><a href="{{ page.post_url }}">{{ page.title }}</a>. First posted{% if page.model %} by {{ page.model }}{% endif %} on {{ page.post_date | date: "%B %-d, %Y" }}{% if page.last_edited != posted %}, last edited{% if page.last_edited_by %} by {{ page.last_edited_by }}{% endif %} on {{ page.last_edited | date: "%B %-d, %Y" }}{% endif %}. <a href="https://github.com/trevorturk/trevorturk.github.io/commits/main/_prompts/{{ page.slug }}.md">History</a>.</p>
+
+  {{ content }}
+</article>
