@@ -2,30 +2,30 @@
 layout: post
 title: "Closing the Loop on Translation Bugs"
 date: 2026-08-24 09:40:00 -0600
-summary: "After shipping 27 languages nobody on the team can proofread, the customers are the QA wave. A feedback button, a computed inbox, a grep-by-value fix, and a human send gate make the loop from bug report to shipped fix to reply cheap on both ends and clean on privacy."
+summary: "We ship 27 languages and can't proofread most of them, so the customers find the translation bugs. A feedback button, an inbox that computes who's waiting, a grep for the quoted string, and a person reading every draft before it's sent turn one bug report into a shipped fix and a reply."
 tags: [workflow, ai-agents, localization, i18n]
 ---
 
 ## The Problem
 
-A model-translated string fails in a way only a native speaker sees. "Clear" comes back as transparent where the forecast meant cloudless. A button verb lands in the wrong register. A unit abbreviation reads as a typo. Each string is plausible on its own and wrong in context, and [Hello Weather](https://helloweather.com) has thousands of them in 27 languages. The one person who runs the product reads a handful of those languages. He will not catch any of these, because he cannot read the screen.
+A model translates a string and gets it wrong in a way only a native speaker would notice. "Clear" comes back meaning transparent when the forecast meant cloudless. A button's verb has the wrong tone. A unit abbreviation looks like a typo. Each string looks fine on its own and is wrong in context. [Hello Weather](https://helloweather.com) has thousands of strings in 27 languages, and the one person who runs it reads a handful of those languages. He won't catch these because he can't read the screen.
 
-The people who can are the customers using the app in that language every day. They are the real QA wave. But a native speaker noticing a bad string does nothing on its own. The report has to survive four handoffs, and each one quietly drops reports:
+The people who can catch them are the customers who use the app in that language every day. They're our proofreaders. But a customer noticing a bad string doesn't fix anything by itself. The report has to get through four steps, and each one loses reports:
 
-1. The customer has to report the error without friction, and the report has to carry enough context to act on. If they must name the screen, in English, from memory, most just close the app.
-2. The report has to land somewhere you actually look, get flagged as needing a reply, and know how to route the reply back.
-3. You have to find the offending string among thousands of keys, fix it correctly, and not destroy the other 26 translations doing it.
-4. You have to reply in the customer's language, which you cannot read, without sending a machine-drafted sentence you never fully saw.
+1. The customer has to send the report easily, and it has to carry enough for us to act on. If they have to name the screen, in English, from memory, most of them close the app instead.
+2. The report has to land somewhere we look, show up as needing a reply, and carry the right address to reply to.
+3. We have to find the bad string among thousands of keys and fix it without breaking the other 26 translations.
+4. We have to reply in the customer's language, which we can't read, without sending a model-written sentence nobody looked at.
 
-This post walks the four links. It is a sequel to [how the support inbox became our localization telemetry](/support-inbox-as-telemetry/). That post is why we invested in translation quality; this one is the machinery that turns one bug report into a shipped fix.
+This post goes through the four steps. It follows [how the support inbox became our localization telemetry](/support-inbox-as-telemetry/). That post explains why we put work into translation quality. This one is the tooling that turns one bug report into a shipped fix.
 
 ## The Solution
 
-Four links, each cheap on both ends. A human sits at the two points where judgment matters, the fix and the send. Everything else is plumbing.
+Four steps, each cheap for the customer and for us. A person does the two parts that take judgment, the fix and the send. The rest is plumbing.
 
-### Link 1: A feedback button that pre-fills the report
+### Step 1: A feedback button that pre-fills the report
 
-The customer knows the language and you know the code, and the report has to bridge the two. "A word looks wrong somewhere in settings" cannot be acted on. So the entry point is a card at the top of the Language screen that builds a pre-addressed email, with the routing facts already in the subject line. Here is the builder and a minimal card that opens it, with a fallback for a device with no mail app configured:
+The customer knows the language and we know the code, and the report has to connect the two. We can't do anything with "a word looks wrong somewhere in settings". So the Language screen has a card at the top that opens a pre-addressed email with the language and app version already in the subject line. Here's the builder and a minimal card that opens it, with a fallback for a device that has no mail app set up:
 
 ```swift
 import SwiftUI
@@ -87,15 +87,15 @@ struct TranslationFeedbackCard: View {
 }
 ```
 
-The subject line carries three facts and no more. The language display name (`Deutsch`) is human-scannable in a triage queue. The language code (`de`) is the column you will grep in the catalog. The app version tells you whether the string still exists in current code. The `language` passed in is the one the user currently has selected, so the report is always about the language they are looking at. When `openURL` cannot hand off to a mail composer, the card offers to copy the address rather than dead-ending.
+The subject line carries three facts. The language name (`Deutsch`) is easy to scan in a list of threads. The language code (`de`) is the row we'll grep for in the catalog. The app version tells us whether the string still exists in current code. The `language` passed in is the one the customer has selected, so the report is always about the language they're looking at. If `openURL` can't open a mail composer, the card offers to copy the address instead of doing nothing.
 
-What the subject omits matters as much as what it carries. No device model, OS version, coordinates, or account identifier. A translation bug is a property of a string and a language, so none of the usual diagnostic telemetry is attached. Nothing sensitive can leak because nothing sensitive was collected.
+The subject leaves out the device model, OS version, location, and account. A translation bug is about a string and a language, so we don't attach the usual diagnostic data. Nothing sensitive can leak because we didn't collect it.
 
-### Link 2: An inbox with no status field
+### Step 2: An inbox with no status field
 
-Triage rots because someone has to keep a status field honest, and nobody does. A "needs reply" flag gets set and forgotten. A thread that got a second customer message still shows answered. So we do not store the status at all. The customer is waiting when their last message is newer than ours. That is a fact about two timestamps, and we derive it every time it is asked.
+Triage falls apart because someone has to keep a status field up to date, and nobody does. A "needs reply" flag gets set and forgotten. A thread where the customer wrote back still shows as answered. So we don't store a status at all. The customer is waiting when their last message is newer than ours. We compute that from the two timestamps every time we list the queue.
 
-Two decisions carry this link, and both are small enough to show in full: the waiting predicate and the sender rewrite, with a test that pins the behavior.
+This step comes down to two small pieces of code: the waiting check and the sender rewrite. Here they are with a test:
 
 ```ruby
 # Trimmed to the two addresses this post discusses; the real list also
@@ -145,15 +145,15 @@ if __FILE__ == $PROGRAM_NAME
 end
 ```
 
-Run that file and the three tests pass. The same predicate appears once more as the SQL the list query filters on, so the CLI and the in-memory check agree by construction. If a customer replies again, the timestamp moves and the thread reappears in the queue on its own. A computed queue cannot drift.
+Run that file and the three tests pass. The same check appears once more as SQL in the list query, so the CLI and the Ruby version agree. If a customer replies again, their timestamp moves and the thread comes back into the queue on its own.
 
-The Reply-To rewrite fixes a specific trap. Reports sent through the website's contact form arrive from our own transactional sender, with the actual customer in the `Reply-To` header. Triage naively on `From` and every one of those threads looks like it came from us. It never flags as waiting, and a reply routes back to ourselves. The substitution at sync time re-attributes the thread to whoever actually wrote it. The local cache is full of customer email, so it lives in a gitignored scratch directory and is never committed.
+The Reply-To rewrite fixes one specific trap. Reports sent through the website's contact form arrive from our own sending address, with the real customer in the `Reply-To` header. If we went by `From`, every one of those threads would look like it came from us. It would never show as waiting, and a reply would go back to us. Swapping in the Reply-To address at sync time credits the thread to the person who wrote it. The local cache is full of customer email, so it lives in a gitignored scratch directory and never gets committed.
 
-### Link 3: Grep the value to find the key
+### Step 3: Grep the value to find the key
 
-The customer quotes a bad string in their language, but the catalog is keyed by English, so you cannot search for what they sent. The move is to grep the catalog for the translated *value*. Every language's value lives under the one English key, so a hit on the German string lands you inside the English entry, with all 27 translations side by side.
+The customer quotes the bad string in their language, but the catalog is keyed by English. So we grep the catalog for the translated text and let the hit take us to the key. Every language's version sits under one English key, so a hit on the German string lands inside that key's entry, with all 27 translations together.
 
-Here is the sequence a maintainer runs, from syncing the inbox to sending the reply:
+Here's the sequence we run, from syncing the inbox to sending the reply:
 
 ```bash
 bin/gmail pull                                    # sync inbox into tmp/gmail.sqlite3
@@ -172,7 +172,7 @@ git diff -- Localizable.xcstrings | grep -c '^-.*"value"'   # expect 0
 bin/gmail reply THREAD_ID --message "…" --archive  # send the picked draft, archive
 ```
 
-The correction itself is a one-row edit inside that entry: fix the value and set its state.
+The fix is a one-row edit inside that entry: change the value and set its state.
 
 ```json
 "de" : {
@@ -183,36 +183,36 @@ The correction itself is a one-row edit inside that entry: fix the value and set
 }
 ```
 
-The `state` line is the part that bites. The team learned this on an English override row: left `new`, the row was silently skipped at runtime and the code's default rendered instead of the correction. A fix with the wrong state ships nothing, so every corrected row gets `translated`. There is also no key-level fallback: a language missing a row for a shipped key renders the raw English key on screen. So a correction is a good moment to check the whole 27-language set, because fixing one language often surfaces a different one quietly missing the same string.
+The `state` line is the one that catches people. We learned this on an English override row: it was left as `new`, the app skipped it at runtime, and the default in code showed instead of the fix. A fix with the wrong state ships nothing, so every corrected row gets `translated`. There's also no fallback per key. A language that's missing a row for a shipped key shows the raw English key on screen. So a fix is a good time to check all 27 languages for that key, because fixing one language often turns up another that's missing the same string.
 
-That final `git diff` guards a String Catalog hazard. A build regenerates the catalog and can prune keys it cannot currently see in code, taking their translations with them. The count of deleted `"value"` lines should be zero. A non-zero count means the build is subtracting translations, and you restore the file rather than commit it. Treat the catalog as a file the build can silently shrink, and diff it like one.
+The `git diff` at the end guards against a String Catalog problem. A build regenerates the catalog and can drop keys it can't see in code at the moment, and their translations go with them. The count of deleted `"value"` lines should be zero. If it isn't, the build removed translations, and we restore the file instead of committing it.
 
-### Link 4: Draft several, show the whole text, send only what was picked
+### Step 4: Draft several, show the whole text, send only what was picked
 
-The send needs a human because the owner is replying in a language he cannot read, and no automated check can tell him a sentence is right. So the policy is to reply in the customer's language with an English gloss in the draft, and to put a person between the model and Send who sees every word. This is convention, not a language detector. The model drafts, a human approves, the CLI sends. The approval shape is what makes it safe:
+The send needs a person because the owner is replying in a language he can't read, and no automated check can tell him whether a sentence is right. So the rule is to reply in the customer's language with an English gloss (a plain translation of the draft) alongside it, and to have a person read every word before it's sent. This is a convention, not something the tool detects. The model drafts, the owner approves, the CLI sends. The approval works like this:
 
 > The model presents at least three meaningfully different drafts. Each option carries the complete reply text, prefixed "Full reply:", with an English gloss for non-English drafts. The owner picks one. The CLI sends only the selected text, verbatim.
 
-The full text lives inside each option because previews truncate, and a truncated preview of a sentence you cannot read is not an approval. The owner sees every word that will be sent, in both languages, before choosing. Once chosen, `reply --archive` sends that exact string and archives the thread.
+Each option includes the full text because previews get cut off, and a cut-off preview of a sentence you can't read isn't an approval. The owner sees every word that will go out, in both languages, before choosing. Then `reply --archive` sends that exact text and archives the thread.
 
-One caveat. The `reply` command is allowlisted, so an agent can invoke it with no per-send permission prompt, and nothing at the tool level forces the text through the selection step. That is a convention, not a technical block, and we took the trade on purpose. A hard prompt on every send would only repeat what the selection already established, since by then the owner has read the full text and picked it. A redundant prompt trains him to click through prompts, which is worse for safety than the convention it replaces.
+One caveat. The `reply` command is allowlisted, so an agent can run it without a permission prompt on each send, and nothing in the tool forces the text through the selection step. That's a convention, not a technical block, and we chose it on purpose. A prompt on every send would only repeat what the selection already did, because by then the owner has read the full text and picked it. A prompt that repeats a choice teaches him to click through prompts, and that's worse for safety than the convention.
 
-### The matching rule on the public side: declared is not launched
+### The same rule for App Store replies: listed is not shipped
 
-A sibling rule governs App Store review replies. An app can *declare* 27 languages in its store metadata long before those languages *launch* in a shipping build, and both the store's language list and the app's declared localizations report the aspiration, not the reality. So a language is not claimed live until it is. Until a translation has shipped, the only sanctioned forward-looking phrasing is that translations are in progress. A public promise that a language works when it does not is one you walk back a single one-star review at a time. (More on treating [store listings as ASO rather than translation](/store-listings-as-aso-not-translation/).)
+A related rule covers replies to App Store reviews. An app can list 27 languages in its store metadata long before those languages ship in a build, and both the store's language list and the app's declared localizations show what's planned, not what works. So we don't say a language is live until it is. Until a translation has shipped, the only thing we say about the future is that translations are in progress. If we say a language works and it doesn't, we get one-star reviews about it. (More on treating [store listings as ASO rather than translation](/store-listings-as-aso-not-translation/).)
 
 ## Results
 
-- A bug report becomes a fix in one sitting. The subject line carries language, code, and version; the code leads to the catalog key; one row and a rebuild ships the correction to everyone. No screen-naming, no repro hunt, no diagnostic data to collect or justify.
-- Triage no longer needs tending. "Waiting" is derived from two timestamps, so the queue cannot fall out of sync, and web-form mail routes to the real customer instead of looping back to us.
-- The cost is a send gate that is convention rather than tooling. The `reply` command runs without a per-send prompt, and the only thing between a draft and a customer is that the owner read the full text and picked it.
+- A bug report becomes a fix in one sitting. The subject line carries the language, its code, and the app version. The quoted string leads to the catalog key and the language code to the row. One row and a rebuild ship the fix to everyone. The customer doesn't name a screen, we don't hunt for a repro, and there's no diagnostic data to collect.
+- Triage needs no upkeep. "Waiting" comes from two timestamps, so the queue can't get out of sync, and web-form mail goes to the real customer instead of back to us.
+- The cost is that the send gate is a convention, not tooling. The `reply` command runs without a prompt on each send, and the only thing between a draft and a customer is that the owner read the full text and picked it.
 
 ## Lessons Learned
 
-- **Collect only the identifier you will act on.** A report that carries the exact key to grep, and no telemetry, is cheaper to send and has nothing to justify or leak.
-- **Derive any status a human would have to keep honest.** If the fact is already in timestamps you record, compute it on every read; a stored flag drifts the first time someone forgets it.
-- **A file a build regenerates is a file a build can shrink.** Diff the generated artifact after every rebuild and treat deletions as a stop, not a cleanup.
-- **Put the gate where the judgment happens, and nowhere else.** A prompt that repeats a choice already made teaches the human to click through prompts.
+- **Collect only what you'll act on.** A report that carries the language code and app version, and no telemetry, is easier to send and has nothing in it to leak.
+- **Compute any status a person would have to keep up to date.** If the answer is already in timestamps you record, work it out on every read. A stored flag goes stale the first time someone forgets it.
+- **A file the build regenerates is a file the build can shrink.** Diff it after every rebuild and treat deleted lines as a reason to stop, not as cleanup.
+- **Put the confirmation where the judgment happens, and nowhere else.** A prompt that repeats a choice already made teaches the person to click through prompts.
 
 ---
 
@@ -225,3 +225,23 @@ Research by eight Claude agents across the iOS, web, and blog repos (string cata
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the kind of error a model makes and the owner cannot see rather than on how much text the app carries, the title is shortened, the spaced-hyphen clauses are split into sentences, Results names the allowlisted send as the cost, and Lessons Learned holds four rules that do not repeat a heading. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The Ruby excerpt now says its address list is trimmed and that lowercasing happens at parse time, since the real constant carries more send-as aliases than the two shown. The String Catalog `state` paragraph was narrowed to what the source records: the runtime skip of a `new` row was observed on an English override row, not asserted for every language. The Swift excerpt, the `waiting?` and `effective_from_email` code, the SQL twin of the predicate, the `bin/gmail` commands, the allowlist, the three-drafts rule, and the 27-language count all matched.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 2, run after batch 1 (#68) merged. The post now says "we" and "can't" where it said "the team" and "cannot", the four handoffs/links are called steps throughout (the ### headings too), "gloss" is defined at first use, "surfaces" became "turns up", and the closing lines on the computed queue, the shrinking catalog, and the one-star reviews were cut or made literal. One judgment call: "the wrong register" for a button verb became "the wrong tone", the ordinary word for the same thing. Code blocks, ## headings, numbers, links, the blockquote, and the earlier meta paragraphs are unchanged. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Prompt 9:** "usage looks fine, merge it and run batch 2"
