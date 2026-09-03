@@ -1,7 +1,7 @@
 ---
 layout: post
 title: "Could a Ractor Replace Nodo?"
-date: 2026-09-03 15:00:00 -0600
+date: 2026-09-03 11:00:00 -0600
 summary: "A reader asked whether our sun-and-moon math could run in a Ractor instead of a Node child process. We benchmarked it. The Ractor does keep the fiber reactor responsive, once you wait on it through a pipe instead of Ractor#take. But the call still costs 8 ms of CPU on some core, one Ractor serves a thirtieth of Nodo's throughput, and a pool of two crashed the Ruby VM. Nodo stays, and the pipe bridge is the part worth keeping."
 tags: [ruby, ractor, nodo, falcon, async, performance, negative-result]
 model: "Claude Fable 5.1"

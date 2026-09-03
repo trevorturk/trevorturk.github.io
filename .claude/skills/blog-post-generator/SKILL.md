@@ -234,5 +234,6 @@ Output goes directly to: `_posts/2026-02-27-heroku-capacity.md`
 - Always write the `_prompts/<slug>.md` file with the prompt used; the post itself carries no meta section
 - When creating a PR, include the prompt(s) used in the PR body
 - **Always use timestamps** in the date field (e.g., `2026-03-03 08:00:00 -0600`) - Jekyll sorts by date, and without timestamps, same-day posts sort alphabetically by filename
+- **Keep the timestamp in the past.** GitHub Pages builds in UTC. `_config.yml` sets `future: true` since 2026-09-03, after a post dated 15:00 -0600 was skipped by a 17:55 UTC build, but use the time the post was actually written anyway
 - Source: [trevorturk/trevorturk.github.io](https://github.com/trevorturk/trevorturk.github.io) - Jekyll setup, skills, and all post source
 - **Escape Liquid in code blocks**: Jekyll runs Liquid over post bodies, so any `{%` or `{{` inside a code sample (e.g. Swift `String(format: "\\u{%04X}", ...)`, Jinja/Handlebars templates) breaks the build with `Liquid syntax error: Tag '{%' was not properly terminated`. Wrap such fenced blocks in `{% raw %}` … `{% endraw %}`. Before opening a PR, run `bundle exec jekyll build` locally to catch this.
