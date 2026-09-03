@@ -2,22 +2,22 @@
 layout: post
 title: "Silent Push Refresh Without a Location Database"
 date: 2026-02-27 17:00:00 -0600
-summary: "How Hello Weather refreshes widgets with a silent push every 30 minutes while the server stores nothing but anonymous push tokens. The device fetches its own weather, so no customer location ever lands in a server database."
+summary: "Hello Weather refreshes widgets with a silent push every 30 minutes, and the server stores nothing but anonymous push tokens. The device fetches its own weather, so no customer location lands in a server database."
 tags: [ios, apns, privacy, architecture]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-Widgets and complications need fresh weather while the app is closed. The obvious way to supply it, and the way most weather apps work, is for the server to store every user's locations, fetch weather for them on a schedule, and push the results down.
+Widgets, and complications (the watch-face version of a widget), need fresh weather while the app is closed. The obvious way to get it there, and the way most weather apps work, is for the server to store every user's locations, fetch weather for them on a schedule, and push the results down.
 
-That design commits the server to a lot. It holds a record of where every user lives and works, and it has to protect it. The client's location list and the server's copy have to stay in sync. The app needs the Significant Location API so the server hears when a user moves. [Hello Weather](https://helloweather.com) takes privacy seriously, and we wanted fresh data without any of this.
+That design asks a lot of the server. It holds a record of where every user lives and works, and it has to protect that record. The device's location list and the server's copy have to stay in sync. The app has to use the Significant Location API, which tells the server when a user moves. We take privacy seriously at [Hello Weather](https://helloweather.com), and we wanted fresh data without any of this.
 
 ## The Solution
 
-Flip the direction. The device fetches its own weather, and the server's only job is to remind it when. Twice an hour a recurring job sends a silent push to every registered device. The push carries no alert, sound, or badge, only the `content-available` flag that tells iOS to wake the app.
+We flipped it. The device fetches its own weather, and the server's only job is to tell it when. Twice an hour a cron job sends a silent push to every registered device. A silent push has no alert, sound, or badge. It carries only the `content-available` flag, which tells iOS to wake the app.
 
 ### The Architecture
 
@@ -56,11 +56,11 @@ apns_tokens table:
 - updated_at
 ```
 
-No lat/lon, no user accounts, no location history. `updated_at` is touched when the app re-registers, and a daily job deletes tokens untouched for 90 days, so a deleted app falls out of the table on its own.
+No lat/lon, no user accounts, no location history. `updated_at` changes each time the app re-registers. A daily job deletes tokens that haven't changed in 90 days, so a deleted app drops out of the table on its own.
 
 ### The Cron Job
 
-The scheduled part of the backend is one recurring job. It runs every 30 minutes, which lands at :00 and :30, and it does not send the pushes itself. It enqueues one small job per token with a random delay of up to five minutes, so the pushes fan out instead of hitting APNs and the database at once:
+The only scheduled work on the server is one cron job. It runs every 30 minutes, at :00 and :30. It doesn't send the pushes itself. It queues one small job per token, each with a random delay of up to five minutes, so the pushes spread out instead of hitting APNs and our database all at once:
 
 ```ruby
 # config/recurring.yml: schedule: every 30 minutes
@@ -86,25 +86,25 @@ class ApnsTokenPingJob < ApplicationJob
 end
 ```
 
-`ApnsToken#ping` posts to APNs with `apns-push-type: background`, priority 5, and the body `{"aps": {"content-available": 1}}`. A 410 from APNs, or a 400 with `BadDeviceToken`, deletes the token, so the table cleans itself. A silent push shows no notification. Its only effect is to wake the app in the background.
+`ApnsToken#ping` posts to APNs with `apns-push-type: background`, priority 5, and the body `{"aps": {"content-available": 1}}`. If APNs answers 410, or 400 with `BadDeviceToken`, we delete the token, so the table cleans itself.
 
 ### The iOS Side
 
 When the push arrives:
 
 1. iOS wakes the app in the background
-2. App resolves its location: the selected saved location, or the device's current location (already authorized)
-3. App requests weather for that location, unless it fetched within the last 25 minutes
-4. App updates widgets and complications
-5. App goes back to sleep
+2. The app picks its location: the saved location the user has selected, or the device's current location, which the user already authorized
+3. The app requests weather for that location, unless it fetched within the last 25 minutes
+4. The app updates widgets and complications
+5. The app goes back to sleep
 
-The 25-minute window keeps a device that refreshed just before the ping from fetching twice. The location leaves the device only inside the weather request, and that request is the same as any manual refresh.
+The 25-minute check keeps a device that refreshed just before the push from fetching twice. The location leaves the device only inside the weather request, and that's the same request a manual refresh makes.
 
 ## Why This Works
 
 ### Privacy
 
-We cannot leak location data we do not have. There is no database to breach, no logs to subpoena, and no data to sell. The server is architecturally incapable of tracking users.
+We can't leak location data we don't have. There's no location database to breach, and the server can't track users because it never learns where they are.
 
 ### Simplicity
 
@@ -117,37 +117,37 @@ We cannot leak location data we do not have. There is no database to breach, no 
 | Background fetch jobs per user | One cron job for everyone |
 | Location update webhooks | Nothing |
 
-Every row on the left is a system to build and maintain.
+Each row on the left is something we'd have to build and keep running.
 
 ### Reliability
 
-No sync means no sync bugs. The app is the source of truth for locations, so adding one on the phone just works, with no server round-trip.
+With no sync there are no sync bugs. The app owns the location list, so adding a location on the device just works, with no server round-trip.
 
 ### Cost
 
-Server-side tracking fetches weather for every saved location on every cycle. A user with 5 saved locations costs 5 API calls per refresh. Client-side refresh fetches only what the user or their widgets need, which most of the time is one location, wherever they are right now.
+A server that tracks locations fetches weather for every saved location on every cycle. A user with 5 saved locations costs 5 API calls per refresh. A device refreshing itself fetches only what its widgets need, and most of the time that's one location: wherever the user is right now.
 
 ## The Trade-off
 
-The design depends on Apple delivering the push. Silent pushes are not guaranteed. iOS may delay or skip them based on battery, network conditions, or how often the user opens the app.
+This only works if Apple delivers the push, and Apple doesn't promise to. iOS may delay or skip a silent push depending on battery, network conditions, or how often the user opens the app.
 
-In practice this is good enough. Widgets update reliably for active users, and a missed push costs at most 30 minutes, because the next one is already scheduled. Weather does not change that fast.
+In practice that's good enough. Widgets update reliably for people who use the app, and a missed push costs at most 30 minutes because the next one is already scheduled. Weather doesn't change that fast.
 
 ## The Traffic Pattern
 
-The schedule shows up on the server as the "spike" pattern other posts refer to:
+On the server, the schedule shows up as the "spike" pattern other posts mention:
 
 - **:00-:05** - Silent pushes fan out; devices wake up and request weather
 - **:06-:29** - Normal traffic (manual refreshes, app opens)
 - **:30-:35** - Silent pushes fan out again
 - **:36-:59** - Normal traffic
 
-This is why the [CloudFront Logging](/cloudfront-logging/) and [Heroku Capacity](/heroku-capacity/) skills have `spike_00` and `spike_30` capture windows. The load is bursty but predictable, and the fanout is what keeps the first minute of each window from being a wall.
+That's why the [CloudFront Logging](/cloudfront-logging/) and [Heroku Capacity](/heroku-capacity/) skills have `spike_00` and `spike_30` capture windows. The load comes in bursts, but we know when. The random delay spreads each burst over five minutes instead of piling it into the first minute.
 
 ## Lessons Learned
 
-- **Not storing data is simpler than storing it securely.** The privacy win and the simplicity win came from the same decision.
-- **"The server stores user data" is a default, not a requirement.** Ask what the server must know to do its job. Here it was a push token.
-- **A silent push is a coordination signal, not a notification.** It can tell every device when to act without the server knowing anything about any of them.
-- **Accept missed updates when the next one is cheap.** A 30-minute cadence covers a dropped push for data that changes slowly.
-- **Spread the signal.** Waking every device in the same second is a self-inflicted outage; a random delay of a few minutes costs nothing the user can see.
+- **Not storing data is simpler than storing it safely.** The privacy win and the simplicity win came from the same decision.
+- **Storing user data on the server is a habit, not a requirement.** Ask what the server needs to know to do its job. Here it was a push token.
+- **Use a silent push as a wake-up call, not a message.** It can tell every device when to act without the server knowing anything about them.
+- **Accept a missed update when the next one is coming soon.** A push every 30 minutes covers a dropped one for data that changes slowly.
+- **Spread the pushes out.** Waking every device in the same second is an outage we'd cause ourselves. A random delay of a few minutes costs nothing the user can see.

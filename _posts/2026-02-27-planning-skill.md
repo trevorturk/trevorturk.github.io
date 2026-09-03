@@ -2,22 +2,22 @@
 layout: post
 title: "Planning Skill: Living Documents, Not Project Management"
 date: 2026-02-27 11:00:00 -0600
-summary: "A lightweight approach to planning with Claude: create plans, implement them, remove them. No project management software required."
+summary: "A light way to plan work with Claude: write a plan as a markdown file, implement it, then delete it. No project management software needed."
 tags: [skills, planning, workflow, claude]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-Work that spans more than one session needs its context written down somewhere. A todo list holds the "what" but not the "why" or the "how," and it goes stale. An issue tracker is built for multiple people over extended time, and its tickets sit in "Done" forever. Neither fits one person (or one person plus Claude) working on one thing until it is done. We wanted to write down what we're going to do, track progress, then clean up when finished. No ceremonies, no backlog grooming, no status updates.
+When a piece of work takes more than one session, we need to write down where we are and why, or the next session starts over. A todo list holds the "what" but not the "why" or the "how", and it goes stale. An issue tracker is built for a team working over months, and its finished tickets sit in "Done" forever. Neither fits one person, or one person plus Claude, working on one thing until it's done. We wanted to write down what we're going to do, track progress as we go, and clean up when we finish. No ceremonies, no backlog grooming, no status updates.
 
-This comes from people who used to work at Basecamp, makers of project management software. Sometimes the best tool is a markdown file.
+This approach comes from people who used to work at Basecamp, which makes project management software. For this job a markdown file is enough.
 
 ## The Solution
 
-A planning skill that treats plans as **living documents** in a `plans/` directory. Create them, implement them, then remove them. An index file is the navigation: `plans/index.md` when this was written, a root `PLANS.md` since July 2026.
+The planning skill keeps each plan as a markdown file in a `plans/` directory. A plan is a living document: we write it when the work starts, edit it while the work is in progress, and delete it when the work ships. An index file lists every plan. It was `plans/index.md` when this was written and has been a root `PLANS.md` since July 2026.
 
 ### Philosophy
 
@@ -37,7 +37,7 @@ Plans ARE for:
 Create → Implement → Remove → (Preserve critical rationale elsewhere)
 ```
 
-A fully implemented plan gets deleted. Any lesson or pattern worth keeping goes to a skill, README, or AGENTS.md first. The skill now spells out the only three reasons to keep a plan: unstarted future work, dormant work with a live reopen trigger, or an active decision with pending actions. A plan that calls itself a "record" or "reference" is a signal to remove it, not to keep it.
+Once a plan is fully implemented, we delete it. Before that, any lesson or pattern worth keeping moves to a skill, a README, or AGENTS.md. The skill now lists the only three reasons to keep a plan around: the work hasn't started, the work is paused but we know what would restart it, or a decision is still open with actions pending. A plan that calls itself a "record" or a "reference" is a sign to remove it, not keep it.
 
 ## Implementation
 
@@ -74,7 +74,7 @@ Key existing files/symbols (verified paths) the implementer needs.
 - [ ] Deployed
 ```
 
-The Ground Truth section and the complete code came in June 2026, when plans were raised to a handoff-ready standard: written so a less capable model can implement them without exploring the codebase, with verified file paths, full code instead of sketches, and `Verify:` markers on any platform or API fact the author has not confirmed.
+The Ground Truth section and the complete code arrived in June 2026. That's when we started writing plans to what the skill calls a handoff-ready standard: a less capable model can implement the plan without exploring the codebase. In practice that means verified file paths, full code instead of sketches, and a `Verify:` marker on any platform or API fact the author hasn't confirmed.
 
 ### The Index File
 
@@ -93,11 +93,11 @@ The index lists every plan by section. A simplified example:
 (None - implemented plans are removed)
 ```
 
-Every plan creation or removal updates the index. This is non-negotiable. Entries stay at one to three lines plus a link, and a plan file no index entry points to is a bug.
+Every time we create or remove a plan, we update the index in the same change. Each entry is one to three lines plus a link. A plan file with no index entry is a bug.
 
 ### Naming Convention
 
-The skill allows sequential numbers with a letter suffix for sub-plans (`26`, `26a`, `26b`), but in practice every plan in the repos is a descriptive kebab-case name:
+The skill allows numbered names, with a letter suffix for sub-plans (`26`, `26a`, `26b`). In practice every plan in the repos has a descriptive name, lowercase words joined by hyphens:
 - `astronomy-caching.md`
 - `alert-severity.md`
 - `precipitation-refactoring.md`
@@ -111,8 +111,7 @@ The skill's checklist:
 3. **Write the plan to the handoff-ready standard** - verified paths, complete code, `Verify:` markers
 4. **Update index**
 
-When this post was written the first item was "Enable research modes: ultrathink, research mode, web search." That line was cut in July 2026 when the skills were trimmed to verified content; the rule that survives is "Skip research" under Never, now worded "Search the codebase, existing plans, and the web first."
-
+When this post was first written, the first item was "Enable research modes: ultrathink, research mode, web search." That line was cut in July 2026, when the skills were trimmed down to content we had verified. What survives is the "Skip research" rule under Never, now worded "Search the codebase, existing plans, and the web first."
 
 ### Implementing a Plan
 
@@ -129,7 +128,7 @@ git checkout -b implement-api-rate-limiting
 # 6. Test after each major step
 ```
 
-Nothing is executed until the user has seen the summary and agreed:
+Nothing runs until the user has seen this summary and said yes:
 
 ```markdown
 ## Implementation Plan
@@ -165,11 +164,11 @@ Plan implemented in PR #XXX.
 Critical rationale preserved in [location]."
 ```
 
-The commit message names the PR and the file that now holds the patterns, so the deleted plan leaves a trail. The inbound-links step was added in July 2026 after a sweep found 15 links that had rotted across earlier removals. Skills never link into `plans/` for the same reason: the link dies when the plan does, so a skill cites the PR number and carries what it needs itself.
+The commit message names the PR and the file that now holds the patterns, so anyone can trace where the deleted plan went. The inbound-links step was added in July 2026, after a sweep found 15 broken links left behind by earlier removals. Skills never link into `plans/` for the same reason. A link to a plan dies when the plan does, so a skill cites the PR number and carries what it needs itself.
 
 ## Why This Works
 
-Keeping implemented plans creates noise. Future you doesn't need to know how the rate limiting was implemented. They need to know how it works now, and that belongs in documentation or skills. The hardest part is deleting, because we're trained to keep everything. But old plans get stale, reading them wastes time, and anything that mattered was extracted first. Plans are scaffolding: essential during construction, removed when the building is done.
+Implemented plans left in place are noise. Later on we won't need to know how the rate limiting was built. We'll need to know how it works now, and that belongs in the docs or a skill. The hard part is the deleting, because we're used to keeping everything. But an old plan goes stale, reading it wastes time, and anything that mattered was moved out before it was deleted.
 
 ## Critical Rules
 
@@ -196,7 +195,7 @@ As of September 2026, the web repo's list:
 
 ## Real Example
 
-A plan from the iOS repo that was created, implemented, and removed. The on-device AI summaries feature had a wrap-up plan covering the last mile: a loading-state glow, a settings screen, and two future phases. Abridged:
+Here is a plan from the iOS repo that was created, implemented, and removed. The on-device AI summaries feature had a wrap-up plan for the last pieces: a glow while the summary loads, a settings screen, and two phases left for later. Abridged:
 
 **Before implementation:**
 ```markdown
@@ -223,11 +222,9 @@ A plan from the iOS repo that was created, implemented, and removed. The on-devi
 - Index entry marked complete (the skill now says to remove the entry outright)
 - Feature shipped
 
-The plan served its purpose and was removed.
-
 ## Lessons Learned
 
-- **Keep the document that says how it works now; delete the one that says how it was built.** The second goes stale the moment the first exists.
-- **Check for the thing before planning the thing.** A grep and a look at existing plans are cheaper than a plan for work already done.
-- **A plan is written against a moving main.** Sync and reread it before implementing.
-- **Make the index update part of creating and removing, not a separate chore.** An optional index stops being navigation.
+- **Keep the document that says how it works now, and delete the one that says how it was built.** The second goes stale as soon as the first exists.
+- **Check whether it already exists before planning it.** A grep and a look at existing plans cost less than a plan for work that's already done.
+- **Main keeps moving after a plan is written.** Sync and reread the plan before implementing it.
+- **Update the index in the same change that creates or removes a plan.** An index that lags behind stops being trusted.

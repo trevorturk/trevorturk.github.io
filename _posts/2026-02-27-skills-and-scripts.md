@@ -2,38 +2,38 @@
 layout: post
 title: "Skills and Scripts: A Pattern for LLM Workflows"
 date: 2026-02-27 09:00:00 -0600
-summary: "How pairing SKILL.md files with bin/ scripts creates powerful, reusable LLM workflows, and why the data belongs in a database the scripts query rather than in the skill."
+summary: "We pair a SKILL.md file that teaches the model a workflow with bin/ scripts that do the work, and we keep the data in a database the scripts query instead of in the skill."
 tags: [patterns, claude, automation]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-Our first skill paired with a script managed App Store pricing across 175 territories, each with its own price points, currency rules, and constraints. A fresh conversation knows none of that. Every time you start one, something has to supply the knowledge again.
+The first skill we paired with a script managed App Store pricing across 175 territories. Each territory has its own price points and currency rules. A new conversation with the model starts out knowing none of that, so every time we open one, something has to teach it again.
 
-Two common approaches:
+There are two common ways to do that:
 
-1. **Documentation** - Write detailed docs and hope the LLM reads them
-2. **Automation** - Write scripts that handle everything, no LLM needed
+1. **Documentation** - Write it all down and hope the model reads it
+2. **Automation** - Write scripts that do everything, with no model in the loop
 
-Documentation alone lacks actionability. Full automation lacks flexibility. Neither covers the case where you want the LLM to understand *and* be able to act.
+Docs on their own can't do anything. Scripts on their own can't adapt. We wanted the model to understand the job *and* be able to act on it.
 
 ## The Solution: Skills + Scripts
 
-The pattern pairs two things:
+We pair two things:
 
-- **Skills** = `SKILL.md` files that teach Claude specific workflows
-- **Scripts** = `bin/` commands that automate operations
+- **Skills** = `SKILL.md` files that teach Claude a workflow
+- **Scripts** = commands in `bin/` that do the work
 
-Skills provide context and guidance. Scripts provide capability and safety. Together, the LLM knows what to do and has the tools to do it.
+The skill tells the model what to do. The scripts give it a safe way to do it.
 
 ## Implementation
 
-### Skills: Teaching the LLM
+### Skills: Teaching the Model
 
-A skill file lives in `.claude/skills/[name]/SKILL.md` (we have since moved ours to `.agents/skills/`, which Codex reads natively, with `.claude/skills` left as a symlink so both tools find the same files):
+A skill file lives at `.claude/skills/[name]/SKILL.md`. We've since moved ours to `.agents/skills/`, which Codex reads on its own, and left `.claude/skills` as a symlink so both tools find the same files. Here's the shape of one:
 
 ```markdown
 ---
@@ -56,11 +56,11 @@ What scripts/tools exist
 Guardrails and warnings
 ```
 
-Claude Code discovers these from the filesystem. You can invoke one by name (`/skill-name`), but most of the time the model loads it on its own when a task matches the description line, so that line does the work of discovery.
+Claude Code finds these files on disk. You can call one by name with `/skill-name`, but most of the time the model loads it on its own because a task matched the description line. That line is the one to get right.
 
 ### Scripts: Safe Automation
 
-Scripts live in `bin/` and do the actual work:
+Scripts live in `bin/` and do the work:
 
 ```bash
 #!/bin/bash
@@ -78,15 +78,15 @@ fi
 # ...
 ```
 
-Scripts should be:
+A script should be:
 
-- **Self-documenting** - Clear usage messages
-- **Safe by default** - Preview destructive actions, and only execute them behind an explicit `--apply` flag or after a `--dry-run` pass
-- **Idempotent** - Running twice doesn't break things
+- **Self-documenting** - It prints a clear usage message when called wrong
+- **Safe by default** - It previews anything destructive, and only runs it with an explicit `--apply` flag or after a `--dry-run` pass
+- **Idempotent** - Running it twice gives the same result as running it once
 
 ### The Pairing
 
-The skill names the scripts and says which ones are safe:
+The skill lists the scripts and says which ones are safe:
 
 ```markdown
 ## Commands Available
@@ -95,7 +95,7 @@ The skill names the scripts and says which ones are safe:
 - `bin/apply-changes` - Make modifications (preview by default; `--apply` executes)
 ```
 
-Then it says when to use each:
+Then it says when to run each one:
 
 ```markdown
 ## Workflow
@@ -108,15 +108,15 @@ Then it says when to use each:
 
 ## Why This Works
 
-The skill tells the LLM what is possible and where the guardrails are. The scripts handle the fiddly details, so the human gets help without a full context dump every conversation. The team gets workflows that are documented *and* executable, captured in version-controlled files, so a new team member, human or AI, can onboard from them. Patterns compound as you build more skills.
+The skill tells the model what it can do and where the limits are. The scripts handle the fiddly details, so we get help without pasting the whole background into every conversation. Both live in version control, so the workflow is documented and runnable in the same place, and a new team member, human or AI, can learn it from the files. Each new skill builds on the ones before it.
 
 ## Taming Context Exhaustion
 
-The pricing skill taught us this the hard way. LLMs have limited context windows, and filling them with raw data makes everything worse: slower responses, higher costs, and a model that loses track of what was said earlier.
+We learned this one the hard way with the pricing skill. A model can only hold so much text in one conversation (its context window). Fill that with raw data and everything gets worse: answers slow down, costs go up, and the model loses track of what was said earlier.
 
-We first stored the price tiers for all 175 territories in YAML files the skill referenced, one file of about 700 lines per product, plus more for PPP ratios and exchange rates. Every conversation choked on thousands of lines of pricing data before we could ask a question.
+At first we kept the price tiers for all 175 territories in YAML files the skill pointed at. That was about 700 lines per product, plus more files for purchasing-power (PPP) ratios and exchange rates. Every conversation read thousands of lines of pricing data before we could ask our first question.
 
-The fix, eleven days later, was moving the reference data into a SQLite file and building the scripts on ActiveRecord models that query it (simplified):
+Eleven days later we moved the data into a SQLite file and rebuilt the scripts on ActiveRecord models that query it. Simplified:
 
 ```ruby
 # Instead of loading every territory's tiers into context...
@@ -129,11 +129,11 @@ bin/appstore ppp list
 bin/appstore validate --verbose
 ```
 
-Now the LLM never sees the raw data. It calls scripts that return structured, filtered results, so the context stays lean and responses stay fast. Put data in databases, not documentation. Let scripts do the heavy lifting, and return only what the current question needs.
+Now the model never sees the raw data. It calls a script, and the script returns only the rows the question needs, so the conversation stays small and answers stay fast. Put data in a database, not in the skill.
 
 ## Example: Capacity Monitoring
 
-A real skill, for monitoring Heroku dyno capacity, trimmed to its shape:
+Here's a real skill, for watching our Heroku dyno count (the server processes we pay for), trimmed to its shape:
 
 ```markdown
 ---
@@ -162,19 +162,19 @@ description: Heroku dyno capacity workflow for traffic spikes using bin/heroku s
 - Treat wrapper recommendations as decision support.
 ```
 
-Every command is read-only; scaling itself is still a human running the Heroku CLI. The LLM knows when to use the skill, what commands exist, and where the safety boundaries are.
+Every command here is read-only. Scaling is still a person running the Heroku CLI. The model knows when to use the skill, which commands exist, and where it has to stop.
 
 ## Getting Started
 
-1. **Identify a workflow** you do repeatedly
-2. **Write the skill** - What does the LLM need to know?
-3. **Build the scripts** - What actions should be automated?
-4. **Document the pairing** - How do they work together?
+1. **Pick a workflow** you repeat
+2. **Write the skill** - What does the model need to know?
+3. **Build the scripts** - Which actions should be automated?
+4. **Connect them** - The skill lists the scripts and says when to run each
 
-Start simple. One skill, one or two scripts. Iterate as you learn what works.
+Start with one skill and one or two scripts, and add more as you learn what works.
 
 ## Lessons Learned
 
-- **Skills are cheaper than you think** - A few paragraphs of context go a long way
-- **Let the LLM orchestrate and the scripts validate** - The model decides what to run; the script checks inputs and guards destructive actions
-- **Start with read-only** - Build trust before enabling writes
+- **A skill is cheap** - A few paragraphs of context is usually enough
+- **The model decides, the script checks** - The model picks what to run; the script validates inputs and guards anything destructive
+- **Start read-only** - Add writes once the read-only version has earned some trust

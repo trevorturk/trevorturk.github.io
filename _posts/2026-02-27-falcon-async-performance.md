@@ -2,10 +2,10 @@
 layout: post
 title: "Falcon and Ruby Async"
 date: 2026-02-27 16:00:00 -0600
-summary: "Fiber-based concurrency with Falcon and async-http on an I/O-bound Rails proxy, without leaving Ruby: the server config, the client, the barrier fan-out, and where the dyno savings actually came from."
+summary: "How we run a Rails proxy that mostly waits on upstream servers on Falcon and async-http, without leaving Ruby: the server config, the HTTP client, the barrier fan-out, and where the dyno savings came from."
 tags: [ruby, falcon, async, performance]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
@@ -13,15 +13,15 @@ last_edited_by: "Claude Fable 5.1"
 
 ## The Problem
 
-Under Puma, nearly all of a request's time at [Hello Weather](https://helloweather.com) was spent waiting. The app is a proxy and transformation layer. It fetches data from multiple upstream weather providers, transforms it, and returns it to clients. At the time, almost none of the work was computation.
+Under Puma, nearly all of a request's time at [Hello Weather](https://helloweather.com) went to waiting. The app is a proxy. It fetches data from several upstream weather providers, reshapes it, and returns it to the apps. At the time, almost none of that work was computation.
 
-Puma handles concurrency with threads. A thread blocked on an upstream response does nothing until the response arrives, and threads have overhead of their own. For a workload that is nearly all waiting, most of that overhead buys idling.
+Puma runs requests on threads. A thread that's waiting on an upstream response does nothing until it arrives, but it still has a cost of its own. When the work is nearly all waiting, we were paying for threads that mostly sat idle.
 
-The conventional answer is to move I/O-heavy services to Node.js, Go, or Elixir, on the grounds that Ruby is too slow. That advice is out of date.
+The usual advice is to move a service like this to Node.js, Go, or Elixir because Ruby is too slow. That advice is out of date.
 
 ## The Solution
 
-Run the Rails app on Falcon and make upstream requests with async-http. Fibers are lightweight cooperative coroutines. When one fiber waits on I/O, another runs. There is no thread overhead and no callback style to adopt.
+We run the Rails app on Falcon and make upstream requests with async-http. Both are built on fibers. A fiber is a lightweight unit of work that hands off control when it waits, so while one fiber is waiting on the network, another runs. There's no thread cost and no callbacks to write.
 
 ### falcon.rb
 
@@ -46,11 +46,11 @@ service hostname do
 end
 ```
 
-That is the entire Falcon configuration. It runs the Rails app with fiber-based concurrency. The line-length override is the only thing added since 2021; it landed in July 2026 after Heroku's router forwarded request lines longer than Falcon's 8KB default.
+That file is all of our Falcon config. The line-length override is the only thing we've added since 2021. It landed in July 2026, after Heroku's router forwarded request lines longer than Falcon's 8KB default.
 
 ### The HTTP client
 
-Every upstream fetch goes through one client. This is the real class with its request logging and CDN header checks trimmed out:
+Every upstream fetch goes through one class. Here it is, with the request logging and CDN header checks trimmed out:
 
 ```ruby
 require "async"
@@ -112,11 +112,11 @@ class Api::AsyncHttp
 end
 ```
 
-`Async do` opens a fiber context, and `task.with_timeout` applies the timeout at the fiber level. `Async::HTTP::Internet.instance` is a connection pool, so repeated calls reuse connections. Notice `response.read`: when it blocks on I/O, other fibers run. The `parse:` option arrived in July 2026 for endpoints that return something other than JSON; everything else has been stable since the client was written.
+`Async do` runs the block in a fiber, and `task.with_timeout` puts the timeout on that fiber. `Async::HTTP::Internet.instance` is a shared connection pool, so repeated calls reuse connections. The line to notice is `response.read`. While it waits on the network, other fibers run. The `parse:` option arrived in July 2026 for endpoints that return something other than JSON. Everything else has been the same since we wrote the client.
 
 ### Fan-out across sources
 
-One provider needs several endpoints. Each source class declares them, and a `preload_each` helper on the base class runs them under an `Async::Barrier`:
+A single provider can need several endpoints. Each source class lists them, and a `preload_each` helper on the base class runs them together under an `Async::Barrier`, which starts a set of tasks and waits for all of them:
 
 ```ruby
 # In a source class
@@ -155,11 +155,11 @@ def get(cache_level, url, headers = {}, parse: :json)
 end
 ```
 
-Each `*_data` method calls `get` (shown without its CDN header and hit-tracking bookkeeping), which waits on one `Api::AsyncHttp` task. The barrier runs them as sibling fibers, so five requests cost roughly the slowest one, not the sum. If each takes 200ms, total time is ~200ms, not a second.
+Each `*_data` method calls `get`, shown here without its CDN header and hit-tracking bookkeeping. `get` waits on one `Api::AsyncHttp` task. The barrier runs the five as sibling fibers, so the whole batch takes about as long as the slowest request, not the sum. If each takes 200ms, the batch takes ~200ms, not a second.
 
 ## Benchmarking
 
-The Puma-to-Falcon switch predates the repo's benchmark tooling. Once the waiting overlapped, CPU became the limit, and the scripts that exist today were added in February 2026 to chase that:
+We have no benchmarks from the Puma-to-Falcon switch, because the benchmark scripts came later. Once the waiting overlapped, CPU became the limit, and we added the scripts in February 2026 to chase that:
 
 ```bash
 # Basic benchmark
@@ -175,22 +175,22 @@ ruby scripts/benchmark/compare_results.rb \
   tmp/benchmarks/request_full_weather_loops_20260225T000000Z.json
 ```
 
-`weather_request_probe.rb` measures full request path latency and allocations, `derived_hotspots_probe.rb` traces derived attribute methods, and `compare_results.rb` diffs two runs. Each run writes a timestamped file to `tmp/benchmarks/`, so comparisons are reproducible. The pass those scripts came out of, and the dyno reduction that followed it, is in [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/).
+`weather_request_probe.rb` measures latency and allocations for the full request path. `derived_hotspots_probe.rb` traces the derived attribute methods. `compare_results.rb` diffs two runs. Each run writes a timestamped file to `tmp/benchmarks/`, so we can compare runs later. The pass that produced those scripts, and the dyno cut that followed, is in [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/).
 
 ## Results
 
-The switch from Puma to Falcon landed in September 2021, and no benchmark, latency figure, or cost figure from that migration was recorded. The one dyno reduction the repository does record came later, and Falcon was its precondition rather than its cause. In February 2026 a CPU optimization pass on the serialization path took the web fleet from 40 Standard-2X dynos to 8 in one evening, then to 6, as described in [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/). The plans put the cost of that pass this way:
+We switched from Puma to Falcon in September 2021 and didn't record a benchmark, a latency figure, or a cost figure. The one dyno cut the repository does record came later, and Falcon made it possible rather than causing it. In February 2026 a CPU pass on the serialization path took the web fleet from 40 Standard-2X dynos to 8 in one evening, then to 6. That work is in [Find the Hotspot, Then Cut the Dynos](/find-the-hotspot-then-cut-the-dynos/). The plans put the cost this way:
 
 | Web dynos | Before the CPU pass (January 2026) | After (February 25, 2026) | Change |
 |-----------|-----------------------------------|---------------------------|--------|
 | Count | 40 | 8 | 32 fewer |
 | Approximate monthly cost | ~$2,100 | ~$500 | ~$1,600 savings |
 
-Falcon's share of that result is the shape of the workload it left behind. With the upstream waiting overlapped, CPU was the only thing a dyno ran out of, so a cut in CPU per request converted directly into fewer dynos. An earlier version of this post attributed the cost row to the Falcon switch and carried p50, p95, and Apdex before-and-after figures; none of those has a source in the repository, and they have been removed.
+Falcon's part in that was to make CPU the only limit. With the upstream waiting overlapped, CPU was the only thing a dyno ran out of, so cutting CPU per request meant fewer dynos. An earlier version of this post credited the cost row to the Falcon switch and carried p50, p95, and Apdex before-and-after figures. None of those has a source in the repository, so we removed them.
 
 ## Why Ruby Async Works
 
-The workload decides. When the switch was made, most of each request here was waiting on upstream services, with minimal CPU-bound computation and many concurrent requests per user interaction. The same shape covers HTTP proxies, API aggregators, WebSocket servers, and anything else that waits on external services. Fibers stop helping when the time goes into computation: CPU-bound work, heavy database writes, file processing, ML inference. Heavy computation such as image processing is better served by threads or processes.
+It depends on the workload. When we switched, most of each request was waiting on upstream services, with little computation, and one user action could fan out into many requests at once. HTTP proxies, API aggregators, and WebSocket servers have the same shape. Fibers stop helping when the time goes into computation: CPU-bound work, heavy database writes, file processing, ML inference. That kind of work is better served by threads or processes.
 
 ### Compared to alternatives
 
@@ -202,7 +202,7 @@ The workload decides. When the switch was made, most of each request here was wa
 | **Go** | Goroutines | Low, but new language |
 | **Elixir** | Processes | Medium, but new language |
 
-Falcon gives Node.js-level concurrency without leaving Ruby. The Rails app, the gems, and the tooling all stay.
+Falcon gives us Node.js-level concurrency without leaving Ruby. The Rails app, the gems, and the tooling all stay.
 
 ## Migration Path
 
@@ -214,10 +214,10 @@ Moving from Puma to Falcon took five steps, all in one pull request in September
 4. **Update Procfile**: `web: bundle exec falcon host`
 5. **Test locally** before deploying
 
-The one gotcha: any synchronous I/O blocks the whole fiber pool, so every library in the request path must be async-aware. Most modern Ruby HTTP clients are.
+The one catch is that any synchronous I/O blocks the whole fiber pool, so every library in the request path has to be async-aware. Most modern Ruby HTTP clients are.
 
 ## Lessons Learned
 
-- **Fibers only pay off when the wait is I/O.** If a request is mostly computation, threads or processes win.
-- **Choose the concurrency model before the language.** Fibers in Ruby gave what a rewrite in Node.js, Go, or Elixir would have, with the app, gems, and tooling intact.
-- **One blocking call stalls every fiber.** Audit every library in the request path for async support before switching servers.
+- **Fibers only help when the time goes to waiting.** If a request is mostly computation, threads or processes win.
+- **Pick the concurrency model before you pick a language.** Fibers in Ruby gave us what a rewrite in Node.js, Go, or Elixir would have, and we kept the app, the gems, and the tooling.
+- **One blocking call stalls every fiber.** Check every library in the request path for async support before you switch servers.

@@ -2,26 +2,26 @@
 layout: post
 title: "Debugging Dependencies: Research Before Workarounds"
 date: 2026-03-04 09:00:00 -0600
-summary: "Two patterns for working with third-party code: investigate source before guessing, and research upstream before patching."
+summary: "Two habits for third-party code: read the library's source before guessing what it does, and check upstream before writing a workaround."
 tags: [ruby, debugging, dependencies, patterns]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-Agent files were not being found, and the paths the loader built were malformed. The loader lived in a third-party gem. The tempting fix was to guess at the path manipulation and patch around it in our own code, or to monkey patch the loader.
+Our app couldn't find its agent files. The paths it was building were wrong, and the code that built them lived in a third-party gem, not in our app. The tempting fix was to guess what the gem was doing to the path and work around it in our own code, or to monkey patch the gem (override one of its methods from our app).
 
-Both build debt on top of a guess. A library that "isn't working" is usually being called wrong. Or the feature exists under a different name. Or someone already fixed it upstream, and the workaround would outlive the fix.
+Either way we'd be building on a guess. When a library "isn't working", we're usually calling it wrong. Sometimes the feature we want exists under a different name. Sometimes the bug is already fixed upstream, and a workaround we write today would still be there long after the fix ships.
 
 ## Two Complementary Patterns
 
-Two habits cover the two ways a dependency disappoints. When something does not work, read the source before guessing at what it does. When something is missing, research upstream before writing a workaround.
+A dependency lets you down in two ways, and each gets its own habit. When something doesn't work, read the source before guessing what it does. When something is missing, check upstream before writing a workaround.
 
 ## Pattern 1: Investigate Source
 
-Most package managers can locate dependency source and open it in an editor. In Ruby:
+Most package managers can tell you where a dependency's source lives and open it in your editor. In Ruby:
 
 ```bash
 # Find where the gem is installed
@@ -32,7 +32,7 @@ bundle show gem_name
 bundle open gem_name
 ```
 
-Equivalent commands exist for other ecosystems:
+Other ecosystems have equivalents:
 - **npm/yarn:** `npm explore package-name` or check `node_modules/package-name`
 - **pip:** `pip show -f package-name` to find location
 - **cargo:** Check `~/.cargo/registry/src/`
@@ -51,7 +51,7 @@ bundle open problematic_gem
 # Read the code to understand actual behavior
 ```
 
-**Step 3:** Add debug statements if reading is not enough
+**Step 3:** Add debug statements if reading isn't enough
 ```ruby
 # Temporary changes in gem code:
 puts "DEBUG: path = #{path.inspect}"
@@ -77,7 +77,7 @@ bundle pristine gem_name
 
 ### Restore Before You Commit
 
-Debug edits in a gem are temporary. Restore after every investigation, and never commit modified dependency source:
+The debug lines you added to the gem are temporary. Put the gem back after every investigation, and don't commit a gem you've edited:
 ```bash
 bundle pristine gem_name  # Restore single gem
 bundle pristine           # Restore all gems
@@ -85,7 +85,7 @@ bundle pristine           # Restore all gems
 
 ## Pattern 2: Research Before Patching
 
-When the library lacks what you need, spend 25 minutes researching before writing a workaround. A patch written first tends to outlive the upstream fix it duplicates.
+When the library is missing something you need, spend 25 minutes looking before you write a workaround. A workaround written first tends to stay in place long after upstream fixes the same thing.
 
 ### The Research Protocol
 
@@ -124,7 +124,7 @@ Look for:
 
 **Decision (5 min)**
 
-Choose based on what you found, in this order:
+Pick the first of these that fits what you found:
 
 1. **Use existing** - Feature exists, you missed it
 2. **Contribute upstream** - Feature missing, maintainer active
@@ -133,7 +133,7 @@ Choose based on what you found, in this order:
 
 ### If You Must Workaround
 
-Some workarounds are unavoidable. When you write one:
+Sometimes there's no way around writing one. When that happens:
 
 - **Isolate it** - Single initializer, clearly marked
 - **Test for removal** - Version check test that fails when you upgrade
@@ -169,11 +169,11 @@ test "gem_name version check for monkey patch" do
 end
 ```
 
-The test is the removal plan. It passes today and fails on the first gem upgrade, so the patch cannot be forgotten and cannot silently override the upstream fix.
+The test is how the monkey patch gets removed. It passes today and fails the first time the gem is upgraded, so whoever upgrades has to check whether the patch is still needed. Without it, the patch would keep overriding the gem's method after upstream had fixed the bug.
 
 ## Real Example: Path Resolution Bug
 
-This is the bug from the opening. Reading the source instead of guessing at path manipulation took six steps:
+This is the bug from the opening. Reading the source instead of guessing took six steps:
 
 ```bash
 # 1. Locate gem
@@ -199,17 +199,17 @@ bin/rails test test/models/workflow_test.rb
 bundle pristine swarm_sdk
 ```
 
-The gem resolved `agent_file` paths relative to the config file's directory, so a project-relative path got the config directory prepended. The fix was a corrected relative path in our config. No workaround needed.
+The gem resolves `agent_file` paths relative to the directory the config file is in. We had written a path relative to the project root, so the gem put the config directory in front of it and got the doubled path in the debug output. The fix was one corrected relative path in our config. No workaround.
 
 ## Results
 
-- The path bug was a usage error, fixed with a config change and no patch.
-- The cost is a 25-minute time box before any workaround, and `bundle pristine` after every investigation.
-- Fewer workarounds and monkey patches to maintain, and fixes that go upstream instead of staying local.
+- The path bug was on our side. One config change fixed it, with no workaround.
+- The cost is 25 minutes of research before any workaround, and a `bundle pristine` after every investigation.
+- We maintain fewer workarounds and monkey patches, and fixes go upstream instead of staying in our app.
 
 ## Lessons Learned
 
-- **Most "bugs" are usage errors.** Read the library's source before assuming it is broken; the fix is usually on your side of the call.
-- **25 minutes of research is cheaper than any workaround.** Issues, releases, then source, then decide.
-- **Contribute over patch.** An upstream fix helps everyone and never needs removing.
-- **Give every workaround an exit.** A version check test that fails on the next upgrade beats a comment asking someone to remember.
+- **Most "bugs" are usage errors.** Read the library's source before deciding it's broken. The fix is usually on your side of the call.
+- **25 minutes of research is cheaper than any workaround.** Check issues, then releases, then source, then decide.
+- **Contribute upstream instead of patching.** An upstream fix helps everyone, and there's nothing to remove later.
+- **Give every workaround an exit.** A version check test that fails on the next upgrade works. A comment asking someone to remember doesn't.
