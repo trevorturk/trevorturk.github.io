@@ -2,34 +2,34 @@
 layout: post
 title: "Server-Controlled Promo System with Offer Codes"
 date: 2026-04-03 08:00:00 -0600
-summary: "A promo architecture built on App Store offer codes instead of introductory offers: a server-side date window activates the campaign, the iOS client renders only promos it knows, and a CLI manages the offers in App Store Connect."
+summary: "We moved our promos from App Store introductory offers to offer codes, which anyone can redeem. The server turns a campaign on and off with a date window, the iOS app only shows promos it knows how to draw, and a CLI manages the offers in App Store Connect."
 tags: [swift, ios, storekit, promotions, ruby, cli]
 model: "Claude"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-A user taps a "50% off!" banner, and the purchase fails or charges full price. They were ineligible for the introductory offer, and nothing in the app could have known.
+A user taps a "50% off!" banner, and the purchase fails or charges full price. Apple wouldn't give them the introductory offer, and nothing in the app could have known that.
 
-StoreKit 2 reports introductory-offer eligibility, but the earlier client-side promo could not reliably tell who was ineligible. Anyone who had ever subscribed, or used a free trial months ago, was refused the introductory offer, and the earlier promo's gate on local transaction history was torn out along with the rest of it before this system was built.
+StoreKit 2 does report whether someone is eligible for an introductory offer, but our old client-side promo couldn't tell reliably. Anyone who had ever subscribed, or had used a free trial months ago, was refused. The old promo tried to guess from the transaction history on the device, and we removed that check along with the rest of it before building this system.
 
-The banner is a promise the app cannot keep for an unknown share of the people who see it. Campaigns also had to launch and end without an app update, because marketing should not wait for App Review.
+So the banner was a promise we couldn't keep for some unknown share of the people who saw it. We also wanted to start and end campaigns without shipping an app update, because a sale shouldn't wait on App Review.
 
 ## The Solution
 
 Three layers, each answering one part of the problem:
 
 1. **Server-controlled activation** - a promo key in the API response, toggled by a deploy
-2. **Client-side supported promos** - the iOS app shows UI only for promos it knows how to render
-3. **Offer codes via CLI** - App Store Connect offer management through a skill and script system
+2. **Client-side supported promos** - the iOS app shows a banner only for promos it knows how to draw
+3. **Offer codes via CLI** - a script and a skill that manage the offers in App Store Connect
 
-Offer codes replace introductory offers because they carry no eligibility restriction. Anyone can redeem one, so the banner never promises a discount the store will refuse.
+We use offer codes instead of introductory offers because anyone can redeem one. The banner never promises a discount the store will refuse.
 
 ## Server: Promo Activation
 
-Promo configuration is a YAML file on the server:
+The promo lives in a YAML file on the server:
 
 ```yaml
 # config/appstore/pricing_strategy.yml
@@ -74,9 +74,9 @@ class Api::Promo < Api::Base
 end
 ```
 
-YAML parses the unquoted dates as `Date` objects, which is why the loader permits that class and `active` calls `to_s` before `Date.iso8601`.
+YAML parses the unquoted dates as `Date` objects, so the loader has to permit that class, and `active` calls `to_s` before `Date.iso8601`.
 
-The weather API response carries the promo key as a top-level scalar next to the forecast fields, `"happy10"` inside the window and `null` outside it:
+The weather API response carries the promo key at the top level, next to the forecast fields. It's `"happy10"` inside the window and `null` outside it:
 
 ```json
 {
@@ -87,11 +87,11 @@ The weather API response carries the promo key as a top-level scalar next to the
 }
 ```
 
-Launching a campaign is a YAML edit and a deploy. Ending one early is `name: null` and a deploy. Past `endDate`, `active` returns nil on its own. No app update is involved.
+To launch a campaign, we edit the YAML and deploy. To end one early, we set `name: null` and deploy. Once `endDate` passes, `active` returns nil on its own. None of that needs an app update.
 
 ## Client: Supported Promos
 
-The iOS app does not render whatever key the server sends. It keeps a set of promos it knows how to draw:
+The iOS app doesn't show a banner for whatever key the server sends. It keeps a set of promos it knows how to draw:
 
 ```swift
 @MainActor
@@ -129,11 +129,11 @@ class PromoManager: ObservableObject {
 
 The second check exists for three reasons:
 
-1. **Graceful rollout** - the server can send a new promo key before the app supports it
+1. **Graceful rollout** - the server can start sending a new promo key before the app supports it
 2. **Version safety** - old app versions ignore promos they don't understand
-3. **Debug override** - `promoDebug` tests a promo locally without a server change
+3. **Debug override** - `promoDebug` lets us test a promo locally without changing the server
 
-Notice the first guard: `promoActive` also requires `storeManager.unpaid`, so a paying subscriber never sees the banner. The set holds one key at a time: when the next campaign shipped in June 2026, its key replaced `happy10` rather than joining it.
+The first guard matters too. `promoActive` requires `storeManager.unpaid`, so a paying subscriber doesn't see the banner. The set holds one key at a time. When the next campaign shipped in June 2026, its key replaced `happy10` instead of joining it.
 
 ### Offer Codes
 
@@ -148,11 +148,11 @@ let offerCode = "HAPPY10"
 let offerCodeFamily = "HAPPY10FAM"
 ```
 
-Users redeem the code directly in the App Store. There is no eligibility check, so there is no silent failure.
+Users redeem the code in the App Store. There's no eligibility check, so nothing fails silently.
 
 ### Dismissal Logic
 
-Users can dismiss the banner. The dismissal is stored with a 90-day cooldown, after which the banner returns if the promo is still active:
+Users can dismiss the banner. We store the dismissal date, and after 90 days the banner comes back if the promo is still active:
 
 ```swift
 var promoDismissedAt: Date? {
@@ -184,7 +184,7 @@ var showPromoNag: Bool {
 
 ## CLI: Offer Code Management
 
-Managing offer codes through App Store Connect's web UI is tedious, and clicking through forms is neither repeatable nor auditable. A CLI skill and script system replaces it:
+Managing offer codes in the App Store Connect web UI means clicking through forms, and we can't repeat or audit that. We replaced it with a script and a skill that knows how to run it:
 
 ```bash
 # List all configured offers and their ASC status
@@ -234,7 +234,7 @@ offer_codes:
     enabled: true
 ```
 
-The `customer_eligibilities` line is where the no-surprises promise becomes concrete: new, existing, and expired subscribers all qualify. `offer_eligibility: all` lets the code stack with the introductory trial, so a trial-eligible redeemer gets the trial first and then the discounted year. Prices are computed from `approved_prices.yml` at runtime: the discount is applied to each territory's approved price, then snapped to the highest Apple price tier at or below that target, so the real discount is never smaller than the promised one. `reference_name` is the immutable App Store Connect identifier, dated by convention, so renewing the campaign means a new name.
+The `customer_eligibilities` line is the fix for the original problem: new, existing, and expired subscribers all qualify. `offer_eligibility: all` lets the code stack with the introductory trial, so someone who still qualifies for the trial gets the trial first and then the discounted year. The script computes prices from `approved_prices.yml` when it runs. It applies the discount to each territory's approved price, then drops to the nearest Apple price tier at or below that, so the real discount is at least the one we promised. `reference_name` is the App Store Connect identifier, and it can't change once created. We put the date in it by convention, so renewing the campaign means a new name.
 
 ### Creating Redemption Codes
 
@@ -261,7 +261,7 @@ bin/appstore offer codes values happy10_yearly_single \
 
 ### Rollback
 
-If something goes wrong, deactivation has the same dry-run preview as creation:
+If something goes wrong, deactivating has the same dry-run preview as creating:
 
 ```bash
 # Preview
@@ -309,6 +309,6 @@ bin/appstore offer verify happy10_yearly_family --verbose
 
 ## Why This Works
 
-Each layer takes one failure off the table. Offer codes remove eligibility, so nobody who taps the banner is refused. The date window puts launch and shutdown behind a deploy instead of App Review. The supported set lets old app versions ignore a campaign they cannot render. The CLI makes offer creation repeatable and auditable.
+Each layer removes one way to fail. Offer codes have no eligibility rule, so nobody who taps the banner gets refused. The date window puts launch and shutdown behind a deploy instead of App Review. The supported set lets old app versions ignore a campaign they can't draw. The CLI makes creating offers repeatable, and it leaves a record.
 
-What shipped is the YAML promo block, `Api::Promo`, `PromoManager` with its supported set and 90-day dismissal, and the `bin/appstore offer` commands. The cost is a split in what a deploy can do: launching or ending a campaign is server-only, but a promo key the app has never seen still needs an app release before it renders. Users also leave the app to redeem the code in the App Store. As of April 2026, the first campaign on this system had produced no eligibility-related support tickets; a second campaign ran on the same server window and supported set in June 2026.
+We shipped the YAML promo block, `Api::Promo`, `PromoManager` with its supported set and 90-day dismissal, and the `bin/appstore offer` commands. The cost is that a deploy can only do part of the job. Launching or ending a campaign is server-only, but a promo key the app has never seen still needs an app release before it shows. Users also have to leave the app to redeem the code in the App Store. As of April 2026, the first campaign on this system had produced no support tickets about eligibility. A second campaign ran on the same server window and supported set in June 2026.

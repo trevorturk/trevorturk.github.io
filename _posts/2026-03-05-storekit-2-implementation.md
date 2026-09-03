@@ -2,39 +2,39 @@
 layout: post
 title: "StoreKit 2 Implementation Guide"
 date: 2026-03-05 08:00:00 -0600
-summary: "A production StoreKit 2 implementation with nothing hidden: verified transactions, two update streams, a persisted record that widgets can read and a flag that reaches the watch, a guard against downgrading on a stale flag, and paywall UI built on ProductView."
+summary: "Our full StoreKit 2 code, nothing hidden: verified transactions, two update streams, a saved record that widgets can read and a paid flag that reaches the watch, a guard against downgrading on a stale flag, and a paywall built on ProductView."
 tags: [swift, ios, storekit, subscriptions, in-app-purchase]
 model: "Claude"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-Three processes need to know whether the user has paid: the app, its widgets, and the watch app. The app talks to the App Store and writes what it learns to app-group storage. Widgets read it directly; the watch app gets the `paid` flag over WatchConnectivity into its own copy of the same store. Neither calls StoreKit, so the stored answer has to be right, including on a cold launch before the App Store has been asked.
+Three processes need to know whether the user has paid: the app, its widgets, and the watch app. Only the app talks to the App Store. It writes what it learns to app-group storage, and the widgets read that directly. The watch app gets the `paid` flag over WatchConnectivity and writes it into its own copy of the same store. Neither the widgets nor the watch call StoreKit, so the saved answer has to be right, even on a cold launch before the App Store has been asked.
 
-StoreKit 2 verifies every transaction cryptographically and hands the rest back to the app:
+StoreKit 2 checks each transaction's signature for you. The rest is up to the app:
 
-1. **Monitor in real time** so renewals, cancellations, and refunds land as they happen
-2. **Persist state** in a form every process can read without calling StoreKit
+1. **Watch for changes** so renewals, cancellations, and refunds land as they happen
+2. **Save the state** in a form every process can read without calling StoreKit
 3. **Handle the edge cases**: interrupted purchases, family sharing, sandbox testing
 4. **Build the paywall** on SwiftUI and the new `ProductView`
 
-The documentation covers each API but not a complete production example. This post is one, with nothing hidden.
+Apple's docs cover each API on its own but don't show a complete production example. This post is one, with nothing hidden.
 
 ## The Solution
 
-Three layers, so StoreKit's surface stays out of the business logic:
+Three layers, so the StoreKit calls stay out of the business logic:
 
-- **StoreService** calls StoreKit, verifies transactions, and runs the real-time observers
-- **StoreManager** holds state, persists transactions, and derives entitlements from them
-- **TransactionRecord** is the `Codable` model that gets persisted
+- **StoreService** calls StoreKit, verifies transactions, and runs the two update listeners
+- **StoreManager** holds state, saves transactions, and works out from them what the user is entitled to
+- **TransactionRecord** is the `Codable` model that gets saved
 
 ## Implementation
 
 ### StoreService: The API Layer
 
-StoreService owns every call into StoreKit and is `@MainActor`, so nothing it hands to StoreManager crosses a thread boundary.
+StoreService owns every call into StoreKit. It's `@MainActor`, so nothing it hands to StoreManager crosses a thread.
 
 ```swift
 import StoreKit
@@ -60,11 +60,11 @@ class StoreService {
 }
 ```
 
-The awaits in `activate()` run in order, and the next four sections follow it.
+The awaits in `activate()` run in order, and the next four sections follow the same order.
 
 ### Real-Time Transaction Monitoring
 
-StoreKit 2 exposes changes as async sequences. Two are needed, each in its own long-lived task.
+StoreKit 2 delivers changes as async sequences. We listen to two of them, each in its own task that lives as long as the app does.
 
 ```swift
 func observeTransactionUpdates() async {
@@ -86,11 +86,11 @@ func observeSubscriptionStatusUpdates() async {
 }
 ```
 
-Both loops run for the life of the app and catch renewals, cancellations, and refunds even when the app is backgrounded.
+Both loops catch renewals, cancellations, and refunds, even while the app is in the background.
 
 ### Transaction Verification and Processing
 
-Every transaction, whichever stream delivered it, goes through one switch on its verification result.
+Every transaction goes through the same switch on its verification result, whichever stream delivered it.
 
 ```swift
 func process(_ verificationResult: VerificationResult<Transaction>) async {
@@ -120,11 +120,11 @@ func fetchRenewalInfo(_ transaction: Transaction) async
 }
 ```
 
-An `.unverified` result is logged and dropped, not crashed on. The renewal info is fetched alongside because `willAutoRenew` is the only way to tell "Subscribed" from "Cancelling" later.
+We log an `.unverified` result and drop it rather than crash. We also fetch the renewal info here, because its `willAutoRenew` is the only way to tell "Subscribed" from "Cancelling" later.
 
 ### Handling Unfinished Transactions
 
-The App Store holds every transaction until the app calls `finish()`. A crash mid-purchase leaves one behind, and they accumulate, so draining them is part of every launch.
+The App Store keeps every transaction until the app calls `finish()` on it. A crash in the middle of a purchase leaves one behind, and they pile up, so we drain them on every launch.
 
 ```swift
 func checkForUnfinishedTransactions() async {
@@ -143,11 +143,11 @@ func updateCurrentEntitlements() async {
 }
 ```
 
-`updateCurrentEntitlements` also flips `hasUpdatedCurrentEntitlements`, the flag that later lets StoreManager trust a downgrade.
+`updateCurrentEntitlements` also sets `hasUpdatedCurrentEntitlements`. That's the flag StoreManager checks later before it trusts a downgrade.
 
 ### Restore Purchases
 
-Restore has to work on a new device with empty local storage. `AppStore.sync()` may prompt for Apple ID sign-in and may fail, so the function returns a `Bool`.
+Restore has to work on a new device where local storage is empty. `AppStore.sync()` may ask the user to sign in to their Apple ID, and it may fail, so the function returns a `Bool`.
 
 ```swift
 func restorePurchases() async -> Bool {
@@ -180,11 +180,11 @@ func restorePurchases() async -> Bool {
 }
 ```
 
-The local list is replaced, not merged. The paywall uses the `Bool` to tell a failed sync from one that found nothing.
+We replace the local list rather than merge into it. The paywall uses the `Bool` to tell a sync that failed from one that worked and found nothing.
 
 ### Pre-fetching Products
 
-Fetching at activation means prices are in memory before the paywall appears.
+We fetch the products at activation so the prices are already in memory when the paywall appears.
 
 ```swift
 func fetchProducts() async {
@@ -204,13 +204,13 @@ func fetchProducts() async {
 }
 ```
 
-Paid users skip it. They never see the paywall. `introEligible` is the yearly product's intro-offer eligibility; Apple grants one intro offer per subscription group per account, so the paywall uses it to drop the free-trial copy for anyone who has already used theirs.
+Paid users skip this, since they never see the paywall. `introEligible` says whether the user can still get the yearly plan's intro offer. Apple allows one intro offer per subscription group per account, so the paywall uses this flag to drop the free-trial wording for anyone who has already used theirs.
 
 ---
 
 ## StoreManager: State and Persistence
 
-StoreManager is the single source of truth for purchase state, and everything it exposes derives from the persisted transaction list.
+StoreManager is the one place the app asks about purchase state. Everything it exposes is computed from the saved transaction list.
 
 ```swift
 import Foundation
@@ -246,7 +246,7 @@ class StoreManager: ObservableObject {
 
 ### Defining Product IDs
 
-Twelve product IDs, six current and six legacy, live as static properties on one enum.
+All twelve product IDs, six current and six legacy, are static properties on one enum.
 
 ```swift
 enum Plan {
@@ -301,9 +301,9 @@ enum Plan {
 }
 ```
 
-The legacy IDs are in `allActive` but in neither paywall list, so an old purchase still unlocks the app and the plan cannot be bought again.
+The legacy IDs are in `allActive` but not in either paywall list. An old purchase still unlocks the app, but nobody can buy those plans again.
 
-Two static helpers turn an ID into a title. `planTitle` labels history rows (every legacy plan was a family plan); `planTitleBase` drops the family suffix for the paywall cards. `localized` is the app's String Catalog lookup.
+Two static helpers turn an ID into a title. `planTitle` labels the purchase-history rows, and it treats every legacy plan as a family plan because they all were. `planTitleBase` drops the family suffix for the paywall cards. `localized` is the app's String Catalog lookup.
 
 ```swift
 static func planTitle(_ id: String?) -> String {
@@ -340,7 +340,7 @@ static func planTitleBase(_ id: String?) -> String {
 
 ### The Paid Flag
 
-`paid` is the one boolean the rest of the app checks. Its setter runs the transition handler before writing.
+`paid` is the one boolean the rest of the app checks. Its setter runs `handlePaidChange` before it writes the new value.
 
 ```swift
 var paid: Bool {
@@ -374,7 +374,7 @@ var hasUpdatedCurrentEntitlements: Bool {
 }
 ```
 
-`hasUpdatedCurrentEntitlements` is persisted too, so it survives a relaunch. Feature gates in SwiftUI read `unpaid` through an `@ObservedObject`:
+`hasUpdatedCurrentEntitlements` is saved too, so it survives a relaunch. SwiftUI views that gate a feature read `unpaid` through an `@ObservedObject`:
 
 ```swift
 if storeManager.unpaid {
@@ -384,7 +384,7 @@ if storeManager.unpaid {
 
 ### Handling State Transitions
 
-A change in `paid` is where the app reconfigures itself. The two directions are not symmetric.
+When `paid` changes, the app reconfigures itself. The two directions aren't handled the same way.
 
 ```swift
 func handlePaidChange(oldValue: Bool, newValue: Bool) {
@@ -418,11 +418,11 @@ func handlePaidChange(oldValue: Bool, newValue: Bool) {
 }
 ```
 
-The side effects run inside a `Task` because `pushEnabledChanged()` is async and the `paid` setter is not. Notice the guard on `hasUpdatedCurrentEntitlements`. On a cold launch the persisted `paid` flag may be stale, and without it the app would strip features before the App Store had been consulted. Downgrades wait for the initial sync; upgrades never do.
+The side effects run inside a `Task` because `pushEnabledChanged()` is async and the `paid` setter isn't. Notice the guard on `hasUpdatedCurrentEntitlements`. On a cold launch the saved `paid` flag may be stale. Without the guard, the app would strip features before it had asked the App Store. So a downgrade waits for the first sync, and an upgrade never does.
 
 ### Transaction Persistence
 
-Transactions are JSON in UserDefaults under an app group, so widgets read the same list. `JSONDecoder.decoder` and `JSONEncoder.encoder` are shared instances with the `.iso8601` date strategy.
+Transactions are stored as JSON in UserDefaults under an app group, so the widgets read the same list. `JSONDecoder.decoder` and `JSONEncoder.encoder` are shared instances set to the `.iso8601` date format.
 
 ```swift
 var transactions: [TransactionRecord] {
@@ -457,9 +457,9 @@ func transactionsDidChange() {
 }
 ```
 
-`process(transaction:)` replaces by ID, so a transaction delivered by both streams produces one record. Every write recomputes `paid`, so the flag cannot drift from the list.
+`process(transaction:)` replaces any record with the same ID, so a transaction that arrives on both streams ends up as one record. Every write recomputes `paid`, so the flag can't drift from the list.
 
-The watch is a separate device, so it cannot read this app group. The phone sends `paid` (not the list) in its WatchConnectivity application context, and the watch writes it into its own app-group defaults under the same key. Until the first sync lands, the watch assumes paid rather than flash a paywall.
+The watch is a separate device, so it can't read this app group. The phone sends just the `paid` flag, not the list, in its WatchConnectivity application context. The watch writes it into its own app-group defaults under the same key. Until the first sync lands, the watch assumes the user has paid rather than flash a paywall at them.
 
 ```swift
 class WatchStoreManager: ObservableObject {
@@ -481,11 +481,11 @@ class WatchStoreManager: ObservableObject {
 }
 ```
 
-Simplified: the real `paidWatch` also grandfathers users migrated from the previous app version.
+This is simplified. The real `paidWatch` also keeps access for users who migrated from the previous app version.
 
 ### Computed Entitlement Properties
 
-Nothing about the subscription is stored on its own. Lifetime, expiration, and auto-renew are filters over the transaction array.
+We don't store anything about the subscription on its own. Lifetime, expiration date, and auto-renew are all computed by filtering the transaction list.
 
 ```swift
 var activeTransactions: [TransactionRecord] {
@@ -517,7 +517,7 @@ var willAutoRenew: Bool {
 
 ### Detailed Paid Status
 
-Paid or not is enough for feature gating. The settings screen needs to say what is actually happening.
+Paid or not is enough to gate features. The settings screen needs to say what's actually going on.
 
 ```swift
 enum PaidStatus: String {
@@ -543,13 +543,13 @@ var paidStatus: PaidStatus {
 }
 ```
 
-`.cancelled` means the list has records but none is active: the user paid once and no longer does.
+`.cancelled` means the list has records but none of them is active. The user paid once and doesn't any more.
 
 ---
 
 ## TransactionRecord: The Persistence Model
 
-The record copies every field the entitlement decision needs, so that decision never requires a StoreKit call.
+The record copies every field the entitlement decision needs, so making that decision never requires a StoreKit call.
 
 ```swift
 import Foundation
@@ -605,14 +605,14 @@ struct TransactionRecord: Codable, Identifiable, Equatable {
 }
 ```
 
-`gracePeriodExpirationDate` comes from the renewal info, alongside `willAutoRenew`, and is set only while a renewal is failing.
+`gracePeriodExpirationDate` comes from the renewal info, like `willAutoRenew`, and is only set while a renewal is failing.
 
 ### Determining Active Status
 
 A transaction is active when all three hold:
 - Its product ID is in the list of valid products
-- It has not been revoked (refunded)
-- It has not expired, for subscriptions, or is inside a billing grace period
+- It hasn't been revoked (refunded)
+- For a subscription, it hasn't expired, or it's inside a billing grace period
 
 ```swift
 var active: Bool {
@@ -643,11 +643,11 @@ var lifetime: Bool {
 }
 ```
 
-A record with no expiration date is a lifetime purchase and stays active until revoked. A subscription whose renewal is failing stays active until its grace date passes, so the user is not locked out while Apple retries the charge.
+A record with no expiration date is a lifetime purchase, so it stays active until it's revoked. A subscription whose renewal is failing stays active until its grace date passes, so the user isn't locked out while Apple retries the charge.
 
 ### Revocation Handling
 
-Revocation reasons arrive as integers. Mapping them once, on the record, gives the history UI its label.
+Revocation reasons arrive as integers. We map them to text once, on the record, and the history screen uses that label.
 
 ```swift
 var revocationReasonString: String {
@@ -667,7 +667,7 @@ var revocationReasonString: String {
 
 ## Paywall UI with ProductView
 
-StoreKit 2's `ProductView` loads the product, shows the price, and runs the purchase. A `ProductViewStyle` lets the app's own buttons wrap it.
+StoreKit 2's `ProductView` loads the product, shows the price, and runs the purchase. A custom `ProductViewStyle` lets us wrap it in the app's own buttons.
 
 ### The Main Paywall
 
@@ -741,11 +741,11 @@ struct PaywallView: View {
 }
 ```
 
-The Restore button separates two outcomes that look identical to the user: the App Store could not be reached, and it was reached and had nothing. Dismissal keys off `storeManager.paid` changing, not a purchase callback, so a purchase that completes by any route closes the paywall. The trial copy switches on `introEligible == false` only; `nil` means eligibility is unknown, and the trial copy stays.
+The Restore button tells apart two outcomes that look the same to the user: we couldn't reach the App Store, or we reached it and it had nothing. The paywall closes when `storeManager.paid` changes, not on a purchase callback, so a purchase that completes by any route closes it. The trial wording only switches off when `introEligible == false`. A `nil` means we don't know yet, and the trial wording stays.
 
 ### Custom ProductViewStyle
 
-While loading, the style shows the real button redacted (the real one also shimmers, through a third-party modifier). On success it wraps the same button around `configuration.purchase()`.
+While the product loads, the style shows the real button redacted. (In the app it also shimmers, through a third-party modifier.) Once loaded, it wraps the same button around `configuration.purchase()`.
 
 ```swift
 struct TrialButton: ProductViewStyle {
@@ -781,7 +781,7 @@ struct TrialButton: ProductViewStyle {
 
 ### Plan Selection View
 
-Three `ProductView`s in a row with a selectable style, a family-sharing toggle that swaps the set and moves the selection to the matching yearly plan, and a fourth `ProductView` as the Continue button.
+Three `ProductView`s in a row, each with a selectable style. A family-sharing toggle swaps in the family set and moves the selection to the matching yearly plan. A fourth `ProductView` is the Continue button.
 
 ```swift
 @MainActor
@@ -821,7 +821,7 @@ struct PaywallPlansView: View {
 
 ### Selectable Plan Style
 
-On success the style holds the real product, so the card shows the App Store's localized `displayPrice`. A plan that fails to load shows the same error button as the trial button, so the row never silently loses a card.
+Once loaded, the style has the real product, so the card shows the App Store's localized `displayPrice`. A plan that fails to load shows the same error button as the trial button, so the row never quietly loses a card.
 
 ```swift
 struct SelectablePlanStyle: ProductViewStyle {
@@ -868,7 +868,7 @@ struct SelectablePlanStyle: ProductViewStyle {
 
 ## Transaction History UI
 
-Every recorded transaction, split into active and inactive, with a tap through to detail.
+Every saved transaction, split into active and inactive, with a tap through to a detail view.
 
 ```swift
 @MainActor
@@ -903,7 +903,7 @@ struct TransactionsView: View {
 
 ### Transaction Detail with Refund Request
 
-The detail view reads only the persisted record. Request Refund opens Apple's `refundRequestSheet` for that transaction ID. The row labels go through `localized()` in the real file.
+The detail view reads only the saved record. Request Refund opens Apple's `refundRequestSheet` for that transaction ID. In the real file, the row labels go through `localized()`.
 
 ```swift
 struct TransactionDetailView: View {
@@ -1000,7 +1000,7 @@ private struct DetailRow: View {
 
 ## Initialization
 
-StoreService is activated once, from a `.task` on the root view, after data migrations have run. The app shows a loading view until `AppMonitor` flips `ready`. Simplified: onboarding and the other services are omitted.
+StoreService is activated once, from a `.task` on the root view, after the data migrations have run. The app shows a loading view until `AppMonitor` sets `ready`. This is simplified: onboarding and the other services are left out.
 
 ```swift
 @main
@@ -1045,8 +1045,8 @@ class AppMonitor: ObservableObject {
 
 ## Lessons Learned
 
-- **A persisted entitlement flag is a cache.** Never revoke access on its say-so. Wait for the first sync with the store before downgrading.
-- **Persist the record, not the verdict.** Keep every field the entitlement decision needs, so other processes and a history screen answer without the store.
-- **Subscribe to both update streams.** `Transaction.updates` catches purchases; `SubscriptionInfo.Status.updates` catches renewal-state changes.
-- **An unverified transaction is noise, not a crash.** Log it and move on. A jailbroken device or corrupted data should not take the app down.
-- **Keep the entitlement decision testable without StoreKit.** `TransactionRecord.active` is unit-tested from JSON fixtures. A StoreKit Configuration file covers purchase flows in the simulator; a sandbox account covers the rest.
+- **A saved paid flag is a cache.** Don't take away access on its word alone. Wait for the first sync with the store before downgrading.
+- **Save the record, not the verdict.** Keep every field the entitlement decision needs, so other processes and a history screen can answer without asking the store.
+- **Listen to both update streams.** `Transaction.updates` catches purchases, and `SubscriptionInfo.Status.updates` catches renewal-state changes.
+- **Log an unverified transaction and move on.** A jailbroken device or corrupted data shouldn't take the app down.
+- **Keep the entitlement decision testable without StoreKit.** `TransactionRecord.active` has unit tests that run on JSON fixtures. A StoreKit Configuration file covers purchase flows in the simulator, and a sandbox account covers the rest.
