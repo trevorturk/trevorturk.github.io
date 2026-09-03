@@ -2,10 +2,10 @@
 layout: post
 title: "CloudFront as an Infinite Cache"
 date: 2026-02-27 14:00:00 -0600
-summary: "Using CloudFront distributions as a caching layer between your app and upstream data providers, with careful cache key design."
+summary: "We put a CloudFront distribution in front of each weather provider so repeated requests come from cache instead of the provider. The cache key is the part that took care to get right."
 tags: [cloudfront, aws, caching, architecture]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
@@ -13,13 +13,13 @@ last_edited_by: "Claude Fable 5.1"
 
 ## The Problem
 
-Most weather providers charge per request, and thousands of [Hello Weather](https://helloweather.com) users ask about the same places at the same times. Calling the providers directly meant paying for every one of those requests, and cost was not the only problem. Each provider has its own rate limits, so a busy hour risked tripping them. Each response took as long as the upstream took, so latency varied from request to request. When a provider went down, the app felt it immediately.
+Most weather providers charge per request, and thousands of [Hello Weather](https://helloweather.com) users ask about the same places at the same times. When we called the providers directly, we paid for every one of those requests. Cost wasn't the only problem. Each provider has its own rate limits, and a busy hour could trip them. Each response took as long as the provider took, so some requests were fast and some were slow. When a provider went down, our users saw it right away.
 
-We needed a caching layer that could absorb that load without complex infrastructure.
+We needed a cache that could take that load without us running more infrastructure.
 
 ## The Solution
 
-Put CloudFront between the app and each provider as an "infinite cache." Every data source gets its own distribution. The app calls CloudFront, and CloudFront calls the origin only on a miss.
+We put CloudFront, Amazon's CDN, between the app and each provider and treat it as an "infinite cache": we don't run it, size it, or store anything ourselves. Each provider gets its own distribution, which is CloudFront's word for one cache with one server behind it. The app calls CloudFront. If CloudFront has the response, it answers from cache. If not, it calls the provider (the "origin," in CloudFront's terms), stores the answer, and returns it.
 
 ### Architecture
 
@@ -35,7 +35,7 @@ Client Request
                             └─> Return to client
 ```
 
-Each source's distribution and origin live in one config file, and a `CDN_ENABLED` flag picks which host the adapter calls (hosts are illustrative):
+One config file lists each provider's distribution and origin. A `CDN_ENABLED` flag decides which of the two hosts the adapter calls. The hosts below are made up:
 
 ```yaml
 # config/cloudfront.yml
@@ -64,24 +64,24 @@ class Api::Host
 end
 ```
 
-Development leaves `CDN_ENABLED` unset and talks to origins directly. A problem at one origin stays inside one distribution and never touches the others.
+In development we leave `CDN_ENABLED` unset, so the app talks to the providers directly. Because each provider has its own distribution, a problem at one provider can't reach another provider's cache.
 
 ## Implementation
 
 ### The Cache Key Problem
 
-A CDN keys its cache on the URL plus the headers you tell it to vary on. The providers' own `Cache-Control` headers are no help: many sources send none, and the rest set TTLs too short to be worth caching. So we send our own expiry header and put it in the cache key. The obvious first version is wrong:
+CloudFront decides whether two requests are the same by looking at the URL plus any headers you tell it to include. That combination is the cache key. The providers' own `Cache-Control` headers don't help. Many providers send none, and the rest set expiry times too short to be worth caching. So we send our own expiry header and tell CloudFront to include it in the key. Our first version was wrong:
 
 ```ruby
 # Different every request = always cache miss
 headers["Cache-Expires"] = 1.hour.from_now.to_s
 ```
 
-Each request computes its own expiration from the moment it is made, so no two requests share a key and nothing is ever a hit.
+Each request computes its expiry from the moment it's made, so no two requests share a key. Nothing is ever a hit.
 
 ### The Cache-Expires Solution
 
-Instead of "how long to cache," send "when this expires," as a fixed boundary time:
+Instead of "how long to cache," we send "when this expires," and we round that time to a boundary so every request in the same window agrees on it:
 
 ```ruby
 CDN_USER_AGENT = "weathermachine.io"
@@ -113,7 +113,7 @@ def cdn_headers_for(cache_level, url = nil)
 end
 ```
 
-Every time-based branch rounds down to a boundary and then adds one second past it, so a request made exactly on the boundary keys to the next window rather than the one that just closed. `:weekly` sends a version string instead of a time; CloudFront's TTL on every distribution is one week, so `v1` rides that TTL and only a bumped version evicts it. `:astronomy` and `:pollen` landed in June 2026, after this post was first published, for data that changes once per calendar date. Requests made at different times inside the same window now produce the same header:
+Every time-based branch rounds down to a boundary, then adds one second. The extra second matters for a request made exactly on the boundary: it keys to the next window instead of the one that just closed. `:weekly` sends a version string instead of a time. CloudFront's TTL on every distribution is one week, so `v1` stays cached for that week, and we replace it by bumping the version number. `:astronomy` and `:pollen` were added in June 2026, after this post first went up, for data that changes once per calendar date. Requests made at different times inside the same window now send the same header:
 
 ```ruby
 # Request at 01:05 UTC → Cache-Expires: 02:00 UTC (miss)
@@ -124,7 +124,7 @@ Every time-based branch rounds down to a boundary and then adds one second past 
 
 ### Cache Levels
 
-Different data types need different freshness:
+Each kind of data goes stale at its own rate, so each gets its own level:
 
 | Level | Boundary | Max Cache Time | Use Case |
 |-------|----------|----------------|----------|
@@ -136,11 +136,11 @@ Different data types need different freshness:
 | `:astronomy` / `:pollen` | next UTC date | ~24 hours | Sun/moon, pollen |
 | `:weekly` | version | 1 week | URL-stable only: location keys, geocoding |
 
-Sun/moon data ran on `:daily` until June 2026 and now has its own level. It never belonged on `:weekly`: the static `v1` key would serve the same phases all week. Anything keyed to a calendar date needs a level that rolls at the date boundary.
+Sun and moon data ran on `:daily` until June 2026, and now has its own level. It was never a fit for `:weekly`, because the fixed `v1` key would serve the same moon phases all week. Anything tied to a calendar date needs a level that rolls over at the date boundary.
 
 ### 15-Minute Buckets
 
-Current conditions bucket into 15-minute windows:
+The `:currently` and `:alerts` levels use 15-minute windows. This helper picks the end of the current one:
 
 ```ruby
 def cdn_15_minutes
@@ -155,7 +155,7 @@ end
 
 ### The get() Helper
 
-Source adapters name the cache level and the URL, and nothing else:
+A source adapter, our wrapper around one provider's API, passes a cache level and a URL, and nothing else:
 
 ```ruby
 def currently_data
@@ -164,7 +164,7 @@ def currently_data
 end
 ```
 
-Under the hood, `get()` adds the cache headers and counts hits and misses:
+`get()` adds the cache headers and counts hits and misses:
 
 ```ruby
 def get(cache_level, url, headers = {})
@@ -181,7 +181,7 @@ end
 
 ### Api::AsyncHttp
 
-The HTTP client refuses any CloudFront request that would key the cache wrong:
+The HTTP client refuses any request to CloudFront that would get the cache key wrong:
 
 ```ruby
 class Api::AsyncHttp
@@ -219,11 +219,11 @@ class Api::AsyncHttp
 end
 ```
 
-CloudFront forwards only the headers its config names and drops the rest before the origin sees them. A new header added elsewhere would either vanish silently or, once added to the config, fragment the cache key. The allowlist mirrors the config, so a header that is not in both raises at the call site. `Accept` and `Authorization` are there because a couple of origins need them on the request.
+CloudFront forwards only the headers named in its config and drops the rest before the provider sees them. So a header added somewhere else in the code would disappear without an error. If someone then added it to the CloudFront config to fix that, it would become part of the cache key and split the cache. The allowlist in the client matches the config, so a header missing from either one raises where it's called. `Accept` and `Authorization` are on the list because a couple of providers need them.
 
 ### Additional Cache Key Headers
 
-Beyond `Cache-Expires`, we include:
+Besides `Cache-Expires`, we send three more headers that go into the key:
 
 | Header | Purpose |
 |--------|---------|
@@ -233,7 +233,7 @@ Beyond `Cache-Expires`, we include:
 
 ## Debugging Cache Behavior
 
-CloudFront reports what happened on every response:
+Every CloudFront response says whether it came from cache:
 
 ```bash
 curl -I "https://d123abc.cloudfront.net/endpoint?lat=41.87&lon=-87.62"
@@ -255,17 +255,17 @@ Age: 123                       # Seconds since cached
 
 ## Related: Timeout Tuning
 
-Each source has its own latency profile, so this architecture creates a need for per-source timeout tuning. [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/) covers how CloudFront logs drive those timeouts.
+Each provider answers at its own speed, so each one needs its own timeout. [CloudFront Logging: Time-Boxed Investigations](/cloudfront-logging/) covers how we use CloudFront logs to set those timeouts.
 
 ## Results
 
-- Cache hit rates of 60-80% for frequently accessed locations, as of February 2026.
-- Fewer origin requests, so lower upstream costs.
-- CloudFront shields the app from brief provider outages, and edge locations serve cached responses faster than the origin would.
+- As of February 2026, 60-80% of requests for popular locations came from cache.
+- Fewer requests reach the providers, so we pay them less.
+- A short provider outage doesn't reach the app while the cache holds. Cached responses also come back faster than the provider would answer, because CloudFront serves them from its edge locations.
 
 ## Lessons Learned
 
-- **One distribution per origin.** Isolation is cheaper than debugging one source's bad responses showing up in another's cache.
-- **Reject unapproved cache headers at the client.** A stray header is silently dropped or silently fragments the key; an exception is a bug you find in development.
-- **Count hits and misses at the call site.** Without a tracker, the savings are invisible and so are regressions.
-- **Set the TTL per data type.** The freshness the UI needs decides the boundary, and one policy cannot serve a nowcast and a moon phase.
+- **One distribution per provider.** It's cheaper than tracking down one provider's bad responses in another's cache.
+- **Reject unlisted cache headers in the client.** A stray header gets dropped or splits the key, and neither shows up as an error. An exception shows up in development.
+- **Count hits and misses where you make the request.** Without a counter you can't see the savings, and you can't see when they drop.
+- **Pick the cache window per data type.** How fresh the UI needs the data decides the boundary. One window can't serve both a rain nowcast and a moon phase.

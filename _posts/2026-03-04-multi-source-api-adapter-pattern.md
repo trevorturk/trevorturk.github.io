@@ -2,10 +2,10 @@
 layout: post
 title: "Multi-Source API Adapter Pattern in Ruby"
 date: 2026-03-04 09:00:00 -0600
-summary: "Each source adapter declares the units it returns, a converter turns them into the units the customer asked for, and Alba serializers shape the response. Adding a vendor touches no converter, output, or existing adapter."
+summary: "Each vendor adapter says what units it returns, a converter turns them into the units the customer asked for, and Alba serializers shape the JSON. Adding a vendor doesn't touch the converter, the outputs, or the other adapters."
 tags: [ruby, architecture, api, patterns]
 model: "Claude"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
@@ -13,24 +13,24 @@ last_edited_by: "Claude Fable 5.1"
 
 One vendor returns Fahrenheit and miles per hour, with humidity as `85`. Another returns Celsius, meters per second, and precipitation in millimeters. A third mixes systems inside a single response: Fahrenheit temperatures next to precipitation in centimeters, visibility in meters, and moon phase as a number from 0 to 360 rather than 0 to 1. Each wraps those values in its own JSON structure.
 
-The application behind this post is a weather API backed by 10+ vendor sources, and its customers choose their own units. A request for SI has to come back in SI whether the data came from the Fahrenheit vendor or the Celsius one. With that many sources, adding the next one cannot mean editing the ones already in production.
+Our weather API pulls from 10+ vendors, and customers pick the units they want back. A request for SI has to come back in SI whether the data came from the Fahrenheit vendor or the Celsius one. With that many vendors, adding the next one can't mean editing the ones already running.
 
 ## The Solution
 
 Four parts, each with one job:
 
-- **Source adapters** normalize external API data into a standard internal shape
-- **Source units** declare what units each adapter returns
-- **A converter** transforms data from source units to the requested return units
-- **Output serializers** render the final response format
+- **Source adapters** turn each vendor's JSON into one internal shape
+- **Source units** say what units each adapter returns
+- **A converter** turns source units into the units the customer asked for
+- **Output serializers** format the final JSON
 
-Adapters parse, the converter does math, and serializers format. None of them reaches into another's internals.
+Adapters parse, the converter does math, and serializers format. None of them looks inside another.
 
 ## Implementation
 
 ### The Main Interface
 
-One class coordinates a request. It takes the source name, coordinates, and the units the customer wants, and every data point it exposes has already been through the converter:
+One class handles a request. It takes the source name, the coordinates, and the units the customer wants. Every value it returns has already been through the converter:
 
 ```ruby
 class Api::Weather
@@ -57,11 +57,11 @@ class Api::Weather
 end
 ```
 
-The converter is built once per request from two inputs: the units the chosen source declares and the units the customer asked for. Nothing downstream of `currently` ever sees a raw vendor value.
+We build the converter once per request, from the units the source declares and the units the customer asked for. Nothing past `currently` sees a raw vendor value.
 
 ### Source Adapters
 
-Each external API gets one class inheriting from a base. The base fixes the interface: which units this source uses, how to return current conditions, and an optional hook for fetching in parallel.
+Each vendor gets one class that inherits from a base. The base sets three methods: which units this source uses, how to return current conditions, and an optional hook for fetching data in parallel.
 
 ```ruby
 class Api::Sources::Base
@@ -84,7 +84,7 @@ class Api::Sources::Base
 end
 ```
 
-A concrete adapter is mostly a field map from the vendor's structure to the internal one:
+A real adapter is mostly a map from the vendor's field names to ours:
 
 ```ruby
 class Api::Sources::ExampleWeather < Api::Sources::Base
@@ -105,11 +105,11 @@ class Api::Sources::ExampleWeather < Api::Sources::Base
 end
 ```
 
-The adapter knows nothing about the customer's units. It reports its own, US with integer percentages here, and leaves conversion to the converter. The three sentinel constants are all `nil` at runtime; they exist so a field mapped to `DATA_MISSING` reads differently from one mapped to `DATA_PENDING` or `DATA_SKIPPED`.
+The adapter doesn't know what units the customer wants. It says what units it returns, US with whole-number percentages here, and the converter does the rest. The three `DATA_*` constants in the base class are all `nil` at runtime. They exist so that a field set to `DATA_MISSING` tells the next person who reads the adapter something different from one set to `DATA_PENDING` or `DATA_SKIPPED`.
 
 ### Source Units vs Return Units
 
-One unit system per source would not have been enough, because real vendors mix systems in one payload. So the units object takes a base system plus per-field overrides:
+One unit system per source wasn't enough, because real vendors mix systems in one response. So the units object takes a base system plus overrides for single fields:
 
 ```ruby
 # Source A: returns Fahrenheit, mph, percentages as integers
@@ -137,11 +137,11 @@ def source_units
 end
 ```
 
-Source C is US for temperature and wind but metric for precipitation and visibility, and its declaration says so field by field. The converter trusts that declaration completely. It raises on a unit pair it has no entry for, but it has no way to check a declared unit against the data.
+Source C uses US units for temperature and wind but metric for precipitation and visibility, and its declaration says so field by field. The converter trusts that declaration. It raises an error on a unit pair it doesn't know, but it can't tell whether a declared unit matches the data.
 
 ### The Converter
 
-The converter is a lookup table of pure functions keyed by `[from, to]` pairs, one table per measurement type:
+The converter is a lookup table keyed by `[from, to]` pairs, one table per kind of measurement. Each entry is a small function of the value and nothing else:
 
 ```ruby
 class Api::Converter
@@ -180,11 +180,11 @@ class Api::Converter
 end
 ```
 
-When source and return units already match, the value is only rounded. An unknown pair raises rather than guessing. The same shape repeats for wind speed, pressure, visibility, precipitation, and the rest, most of them with a multiplier table instead of lambdas.
+When the source and return units match, the value is only rounded. An unknown pair raises instead of guessing. Wind speed, pressure, visibility, precipitation, and the rest follow the same shape, most with a table of multipliers instead of lambdas.
 
 ### Output Serializers with Alba
 
-The last layer is formatting. [Alba](https://github.com/okuramasafumi/alba) serializers define the JSON structure. Each output is its own resource class listing the fields it carries and how many rows of each series it returns:
+The last layer formats the JSON. We use [Alba](https://github.com/okuramasafumi/alba) serializers. Each output is its own resource class that lists the fields it carries and how many rows of each series it returns:
 
 ```ruby
 class Api::Outputs::Base
@@ -211,7 +211,7 @@ class Api::Outputs::Base
 end
 ```
 
-Output variants do not inherit from the base. A fuller output is a second resource class with the same shape, wider limits, and more attributes:
+Output variants don't inherit from the base. A fuller output is a second class with the same shape, higher limits, and more fields:
 
 ```ruby
 class Api::Outputs::Full
@@ -229,11 +229,11 @@ class Api::Outputs::Full
 end
 ```
 
-The serializer only ever sees converted values, so one class serves a request in any unit system. A minimal, full, or custom output is a class the coordinator picks by name, not a branch inside it.
+The serializer only sees converted values, so one class serves a request in any unit system. The coordinator picks the minimal, full, or custom output by class name. There's no branch inside it.
 
 ## Data Flow
 
-A request for source `foo` in SI units passes through the layers in order:
+A request for source `foo` in SI units goes through the layers in order:
 
 ```
 Request (source=foo, units=si)
@@ -257,7 +257,7 @@ Response (data in SI units)
 
 ## Adding a New Source
 
-Adding a source is mechanical:
+Adding a source is a fixed set of steps:
 
 1. Create `Api::Sources::NewSource < Api::Sources::Base`
 2. Implement data-fetching methods
@@ -265,11 +265,11 @@ Adding a source is mechanical:
 4. Declare `source_units` accurately
 5. Add to the source registry
 
-The converter, the outputs, and the existing sources do not change. Step 4 is where the pattern's risk sits. Declaring Celsius for a vendor that sends Fahrenheit passes every check the converter has, because `["c", "f"]` is a valid pair: 70 comes out as 158, and nothing downstream can tell.
+The converter, the outputs, and the existing sources don't change. Step 4 is the risky one. If you declare Celsius for a vendor that sends Fahrenheit, the converter accepts it, because `["c", "f"]` is a valid pair. A 70 comes out as 158, and nothing downstream can tell.
 
 ## Lessons Learned
 
-- **Declare units per source and per field.** Assuming a vendor's units leads to subtle bugs, and a vendor can mix systems in one payload.
-- **Fetch lazily, because external APIs charge per request.** Memoized accessors on the adapter mean only the data the output asks for is fetched.
-- **Keep converters pure.** Same inputs, same outputs, no side effects, so each conversion is easy to test in isolation.
-- **Use sentinels to say why a field is nil.** `DATA_MISSING`, `DATA_PENDING`, and `DATA_SKIPPED` all resolve to nil, but each records a different reason: unavailable, not yet implemented, or intentionally omitted.
+- **Declare units per source and per field.** Guessing a vendor's units causes quiet bugs, and a vendor can mix systems in one response.
+- **Fetch lazily, because external APIs charge per request.** Accessors on the adapter fetch only what the output asks for, and only once.
+- **Keep converters pure.** Same inputs, same outputs, nothing else touched, so each conversion is easy to test on its own.
+- **Use named constants to say why a field is nil.** `DATA_MISSING`, `DATA_PENDING`, and `DATA_SKIPPED` are all nil, but each records a different reason: the vendor doesn't have it, we haven't implemented it yet, or we chose not to fetch it.

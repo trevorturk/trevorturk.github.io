@@ -2,28 +2,28 @@
 layout: post
 title: "App Store Pricing: 175 Territories, One CLI"
 date: 2026-02-27 12:00:00 -0600
-summary: "Managing App Store subscription pricing across 175 territories with PPP adjustments, offer codes, and a CLI that prevents mistakes."
+summary: "How we set six products' prices in 175 App Store territories with one CLI: purchasing-power adjustments, Apple's price tiers, offer codes, and a verify step that reads every price back."
 tags: [skills, scripts, app-store, pricing]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-[Hello Weather](https://helloweather.com) sells 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. Across Apple's 175 territories, that is over 1,000 individual prices. Each one has to land on one of the roughly 800 Apple price points for its territory, in a territory with its own currency, exchange rate fluctuations, and purchasing power. A price that looks reasonable in one territory can be completely wrong in another, and setting that many by hand in App Store Connect is tedious and error-prone.
+[Hello Weather](https://helloweather.com) sells 6 products: Monthly Single, Monthly Family, Yearly Single, Yearly Family, Lifetime Single, and Lifetime Family. Apple sells in 175 territories, so that's over 1,000 prices. Each one has to be one of the roughly 800 price points Apple allows in that territory. Each territory also has its own currency, its own exchange rate, and its own idea of what a fair price is. A price that looks right in one territory can be badly wrong in another. Setting a thousand of them by hand in App Store Connect is slow and easy to get wrong.
 
-We needed a system that could:
+We wanted a tool that could:
 
-- Calculate appropriate prices based on purchasing power parity (PPP)
-- Find the nearest valid Apple price tier
-- Ensure the price "ladder" makes sense (annual should cost less than 12x monthly)
-- Submit changes to App Store Connect programmatically
+- Work out a price for each territory from purchasing power parity (PPP), a measure of what money buys locally
+- Snap that price to the nearest tier Apple allows
+- Check that the six prices make sense next to each other (a year should cost less than 12 months)
+- Send the changes to App Store Connect from a script
 - Manage offer code campaigns
 
 ## The Solution
 
-A skill/script pair that handles the entire pricing workflow: a `bin/appstore` CLI backed by SQLite for data and YAML for configuration.
+We built a command-line tool, `bin/appstore`, and a skill that tells Claude how to run it. The tool keeps its reference data in SQLite and its settings in YAML.
 
 ### Architecture
 
@@ -39,12 +39,12 @@ bin/appstore
 Data lives in three places:
 
 - `db/appstore.sqlite3` - PPP ratios, exchange rates, territories, Apple price tiers
-- `config/appstore/approved_prices.yml` - Source of truth for prices
-- `config/appstore/pricing_strategy.yml` - Floor/ceiling rules, overrides
+- `config/appstore/approved_prices.yml` - the prices we've approved
+- `config/appstore/pricing_strategy.yml` - the floor and ceiling rules, plus overrides
 
 ### The Pattern: Validate -> Dry-Run -> Submit -> Verify
 
-A price change passes several checkpoints before it reaches App Store Connect, and one after:
+A price change goes through a few checks before it reaches App Store Connect, and one more after:
 
 ```bash
 # 1. Refresh external data (PPP, exchange rates, Apple tiers)
@@ -63,13 +63,13 @@ bin/appstore submit --date 2026-03-01 --verbose
 bin/appstore verify --date 2026-03-01 --verbose
 ```
 
-The `--dry-run` flag has caught many mistakes before they hit App Store Connect. The `--date` flag sets the effective date; it defaults to 72 hours out, and subscription changes must be at least 24 hours in the future. IAPs can change immediately. The final `verify` step reads the effective prices back and compares them to the approved ones, because a submit that reports success can still leave a product unchanged. The first version skipped two legacy products and diffed subscriptions against the current price instead of the one effective on the target date, which is why `verify` exists.
+The dry run has caught many mistakes before they reached App Store Connect. The `--date` flag sets when the new prices take effect. It defaults to 72 hours out, and Apple requires at least 24 hours' notice for subscription changes. One-time purchases can change right away. The last step, `verify`, reads the prices back from App Store Connect and compares them to the approved file. We added it because a submit can report success and still leave a product unchanged. Our first version skipped two older products, and it compared subscriptions against the current price instead of the price that would be in effect on the target date. `verify` is there to catch that kind of gap.
 
 ## Implementation
 
 ### PPP-Based Pricing
 
-A $20/year subscription might be affordable in the US but expensive in Vietnam. Purchasing power parity adjusts the base price for local economic conditions:
+A $20 yearly subscription that's affordable in the US can be expensive in Vietnam. We scale the base price by the territory's PPP ratio, so the target moves with local buying power:
 
 ```ruby
 target_percent = clamp(ppp_ratio, floor, ceiling)  # 69% - 120%
@@ -77,11 +77,11 @@ target_usd = base_price * (target_percent / 100)
 approved_price = find_nearest_apple_tier(territory, target_usd)
 ```
 
-The floor (69%) ensures accessibility in lower-income markets. The ceiling (120%) allows premium pricing in high-income markets.
+The floor of 69% keeps prices within reach in lower-income territories. The ceiling of 120% lets us charge more in high-income ones.
 
 ### Coherence Rules
 
-Individual prices aren't enough. The whole ladder must make sense:
+Each price can be right on its own and still wrong next to the others. The six prices also have to make sense as a set:
 
 | Rule | Requirement | Why |
 |------|-------------|-----|
@@ -92,15 +92,15 @@ Individual prices aren't enough. The whole ladder must make sense:
 
 ### Natural Pricing
 
-Prices should look intentional, not algorithmic:
+A price should look like a person chose it, not a formula:
 
 - **Round numbers**: JPY 2000, KRW 19900
 - **.99 endings**: USD 19.99, EUR 19.99
-- **Lucky 8s**: CNY 88, HKD 168 (cultural preference)
+- **Lucky 8s**: CNY 88, HKD 168 (8 is considered lucky there)
 
 ### Quarterly Review Workflow
 
-Territories with identical pricing are reviewed as a group, which cuts 175 territories to about 40 groups. Claude reads the data files and computes a recommendation for each:
+Every quarter we review the prices. Territories with the same prices are reviewed together, which turns 175 territories into about 40 groups. Claude reads the data files and proposes a change for each group:
 
 ```
 Progress: 12 / 36 complete, 24 remaining
@@ -119,7 +119,7 @@ Options:
 3. Custom adjustment
 ```
 
-After each approval, Claude immediately edits `approved_prices.yml`, never batching changes.
+When we approve a group, Claude edits `approved_prices.yml` right away, not in a batch at the end.
 
 ### Offer Codes
 
@@ -137,7 +137,7 @@ bin/appstore offer codes one-time CAMPAIGN_KEY --count 1000 --expires 2026-04-01
 bin/appstore offer codes custom CAMPAIGN_KEY --code SPRINGDEAL --limit 500
 ```
 
-Offer prices are computed from `approved_prices.yml` at runtime, so there are no duplicate price files.
+Offer prices are worked out from `approved_prices.yml` when the command runs, so there's no second price file to keep in sync.
 
 ## Results
 
@@ -145,11 +145,11 @@ As of February 2026:
 
 - **175 territories** managed from one config file
 - **Quarterly reviews** take 30 minutes instead of hours
-- **Zero pricing errors** since implementing the verify step
-- **Offer campaigns** launched in minutes, not days
+- **No pricing errors** since we added the verify step
+- **Offer campaigns** launch in minutes instead of days
 
 ## Lessons Learned
 
-- **SQLite over YAML for data.** Our first version stored price points in 176 per-territory YAML files of about 1,600 lines each, and context windows exploded. SQLite with ActiveRecord models lets us query only what we need.
-- **Group identical rows before asking a human to review.** About 40 groups get reviewed in one sitting. 175 rows do not.
-- **A submit is not done until it is read back.** A write can succeed and still leave the remote wrong. Compare effective values to the source of truth after every write.
+- **Keep reference data in SQLite, not YAML.** Our first version kept Apple's price points in 176 YAML files, one per territory, about 1,600 lines each. Reading them filled the context window. With SQLite and ActiveRecord models we pull only the rows we need.
+- **Group identical rows before asking a person to review them.** About 40 groups fit in one sitting. 175 rows don't.
+- **A submit isn't done until you've read it back.** A write can succeed and still leave the remote side wrong. After every write, read the live values and compare them to what you meant to write.

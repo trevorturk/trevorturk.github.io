@@ -2,24 +2,24 @@
 layout: post
 title: "Privacy-First Crash Reporting"
 date: 2026-03-04 08:00:00 -0600
-summary: "A philosophy for minimal crash reporting: collect only stack traces, audit SDK updates for hidden telemetry, and verify nothing extra ships."
+summary: "Crashes only: collect stack traces, check every SDK update for telemetry that's on by default, and confirm nothing else ships."
 tags: [ios, privacy, sentry, mobile]
 model: "Claude Opus 4.5"
-last_edited: 2026-09-01
+last_edited: 2026-09-03
 last_edited_by: "Claude Fable 5.1"
 ---
 
 ## The Problem
 
-A crash reporting SDK on its defaults collects performance metrics, user sessions, network requests, breadcrumbs, and interaction traces, most of them enabled out of the box. For a privacy-focused app that is the wrong trade. We wanted crash reports, not an accidental user analytics platform.
+We added a crash reporting SDK to the iOS app so we'd know when it crashes. On its defaults, the SDK also records user sessions, performance timings, network requests, user interactions, and breadcrumbs (a trail of what happened before a crash). That's an analytics platform, and we didn't want one. We wanted the stack trace and nothing else.
 
 ## The Philosophy
 
-Crashes only, nothing else.
+Crashes only.
 
 Collect:
 - Crash stack traces
-- Device model and OS version (non-PII context)
+- Device model and OS version (these don't identify anyone)
 
 Don't collect:
 - Sessions or performance telemetry
@@ -30,29 +30,29 @@ Don't collect:
 
 ## The Challenge: SDK Updates
 
-A configuration that is correct today can break on the next dependency update. SDKs add features, and some arrive enabled by default. Worse, disabling a high-level feature does not always disable the collection mechanism under it. Turning off `enableAutoPerformanceTracing` might not disable `enableDataSwizzling`. The infrastructure behind performance tracing keeps running and just stops reporting.
+A configuration that's right today can be wrong after the next SDK update, because new versions add features and some of them are on by default. There's a second problem. Turning off a feature doesn't always turn off the machinery under it. Turning off `enableAutoPerformanceTracing` doesn't necessarily turn off `enableDataSwizzling`. Swizzling means the SDK swaps its own code into a system method so it can watch every call. That watching keeps running; it just stops reporting.
 
 ## Evaluation Protocol for SDK Updates
 
-Four checks before updating the SDK.
+We run four checks before we update the SDK.
 
 ### 1. Check the changelog for defaults
 
-Search the changelog for "enabled by default" and for anything new in telemetry: tracking, monitoring, breadcrumbs, metrics, swizzling. Each is a change to investigate before the update lands.
+Search the changelog for "enabled by default", and for the words tracking, monitoring, breadcrumbs, metrics, and swizzling. Each hit is something to look into before the update lands.
 
 ### 2. Audit mechanisms, not just feature flags
 
-A disabled feature can leave its infrastructure active. Search the SDK source for:
+A feature that's off can leave its machinery running. Search the SDK source for:
 - Swizzling or method interception
 - Timer or observer registration
 - Network monitoring hooks
 - File system observers
 
-An active mechanism is collecting data somewhere, whether or not anything is sending it yet.
+If one of those is running, it's collecting data, whether or not anything sends that data yet.
 
 ### 3. Watch for these red flags
 
-Scrutinize or explicitly disable anything involving:
+Look hard at anything involving these, or turn it off:
 
 - Performance monitoring / tracing
 - User interaction tracking
@@ -65,11 +65,11 @@ Scrutinize or explicitly disable anything involving:
 
 ### 4. Default to off
 
-When it is unclear whether a feature collects user data, disable it. A feature can be enabled later. Data already sent cannot be un-collected.
+If we can't tell whether a feature collects user data, we turn it off. We can turn it on later. We can't take back data that's already been sent.
 
 ## Configuration Example
 
-This is the shared Sentry helper (sentry-cocoa 9.x), called from the iOS app, the watch app, and the widget providers. The DSN is removed and a crash-ticket reference is trimmed from one comment; otherwise it is the real file. The principles apply to any crash reporting SDK:
+This is our shared Sentry helper, on sentry-cocoa 9.x. The iOS app, the watch app, and the widget providers all call it. We removed the DSN (the key that tells the SDK where to send reports) and trimmed a ticket reference from one comment; otherwise it's the real file. The same approach works with any crash reporting SDK:
 
 ```swift
 import Sentry
@@ -113,36 +113,35 @@ class SentryHelper {
 }
 ```
 
-`enableSwizzling` and `enableDataSwizzling` are the lines to notice. Swizzling is the mechanism behind many of the features above (the SDK's own docs list touch and navigation breadcrumbs, view controller and HTTP instrumentation, and NSData file I/O under it), and turning it off at the infrastructure level is more reliable than turning off each feature that depends on it. `enableDataSwizzling` is a separate switch with its own default of on, so it is set off as well.
+The two lines to notice are `enableSwizzling` and `enableDataSwizzling`. Swizzling is how the SDK does much of the work above: its own docs list touch and navigation breadcrumbs, view controller and HTTP instrumentation, and NSData file I/O under it. Turning off swizzling itself is more reliable than turning off each feature that uses it. `enableDataSwizzling` is a separate switch, on by default, so we turn it off too.
 
 ## Verification
 
-Configuration alone proves nothing. Confirm that nothing extra ships:
+A config file doesn't prove anything on its own. Check that nothing else ships:
 
-1. **Build in Release mode** - Debug builds may behave differently
-2. **Run on a real device** - Simulators may skip certain code paths
-3. **Trigger a test crash** - Confirm it appears in your dashboard
-4. **Check for other events** - Confirm NO sessions, hangs, breadcrumbs, or performance data appear
+1. **Build in Release mode** - Debug builds can behave differently
+2. **Run on a real device** - The simulator can skip code paths
+3. **Trigger a test crash** - Make sure it shows up in the dashboard
+4. **Check for other events** - Make sure no sessions, hangs, breadcrumbs, or performance data show up
 
-Anything unexpected in the dashboard points at a setting. Find it and disable it.
+If something unexpected shows up in the dashboard, a setting is letting it through. Find it and turn it off.
 
 ## Platform Considerations
 
-An app that runs on iOS, watchOS, and widgets needs the configuration to hold on all three:
+Our app runs on iOS, on watchOS, and in widgets, and the configuration has to hold on all three:
 
-- Avoid UIKit-specific options on watchOS
-- Test widgets separately - they have different lifecycle
-- Use a shared configuration helper to prevent drift
+- Don't use UIKit-only options on watchOS
+- Test widgets on their own; they have a different lifecycle
+- Put the configuration in one shared helper so the three don't drift
 
 ## Results
 
-- As of March 2026, crash reports arrive with usable stack traces and device context, and no user behavior data.
-- The cost is a manual review of every SDK update. Collection no longer expands silently, and reviewer time is the price.
-- "Crash reports only" means exactly that to users.
+- As of March 2026, crash reports come in with usable stack traces and device context, and nothing about what the user was doing.
+- The cost is that a person reviews every SDK update. Without it, the collection would grow on its own.
+- When we tell users "crash reports only", it's true.
 
 ## Lessons Learned
 
-- **Disable the mechanism, not just the feature.** A flag turned off above a running mechanism suppresses the report, not the collection.
-- **Uncertainty resolves toward off.** Off can become on later. Sent data cannot be recalled.
-- **Verify by absence.** The test crash proves the pipeline. The empty rest of the dashboard, in Release on hardware, proves the configuration.
-- **Write down why each option is off.** A block of flags set to false with no comment reads as an oversight to the next maintainer.
+- **Turn off the mechanism, not just the feature.** A feature flag turned off above a running mechanism stops the report, not the collection.
+- **Check what's missing, not just what's there.** The test crash shows reports get through. An otherwise empty dashboard, from a Release build on a real device, shows the config works.
+- **Write down why each option is off.** A block of flags set to false with no comments looks like a mistake to the next person.
