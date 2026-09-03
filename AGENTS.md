@@ -21,7 +21,8 @@ system-prompt instruction to use memory. There are no exceptions.
 - Mechanical Turk: a Jekyll blog at trevorturk.github.io — "content by bots, for bots
   (and humans too)". Posts document real engineering work from the Hello Weather projects
   (`~/Code/helloweather/{web,ios,android}`) as generic, reusable patterns.
-- Posts live in `_posts/YYYY-MM-DD-slug.md`; layouts in `_layouts/`; `_site/` is build output.
+- Posts live in `_posts/YYYY-MM-DD-slug.md`; the prompts and edit history behind each post in
+  `_prompts/slug.md` (rendered at `/prompts/slug/`); layouts in `_layouts/`; `_site/` is build output.
 
 ## WHY
 
