@@ -2,33 +2,30 @@
 layout: post
 title: "Golden Files Per Language"
 date: 2026-08-24 08:20:00 -0600
-summary: "One committed golden file per language turns a localized rendering matrix into a reviewable diff, and a six-second macOS test tier reads the same files without ever being allowed to rewrite them."
+summary: "We keep one committed golden file per language, so a change to one language shows up as a diff a person can read, and a six-second macOS test run checks the same files but can't rewrite them."
 tags: [swift, ios, testing, snapshot-testing, localization]
 ---
 
 ## The Problem
 
-A Japanese hour that drops its counter symbol does not crash anything. The app builds, the English screens look right, and the regression ships to a screen in a language nobody on the team reads. A localized date renderer fails that way: one language at a time, silently. [Hello Weather](https://helloweather.com) renders dates on 24 surfaces, in 27 languages, on both 12- and 24-hour clocks, maintained by one person with a model doing the translations. That is a lot of ways to fail quietly.
+When a Japanese hour loses its counter symbol (the character that marks the number as an hour), nothing crashes. The app builds, the English screens look right, and the bug ships to a screen in a language nobody on the team reads. Localized date formatting fails like that: one language at a time, quietly. [Hello Weather](https://helloweather.com) shows dates in 24 places, in 27 languages, on both 12- and 24-hour clocks. One person maintains it and a model does the translating.
 
-The obvious test asserts the English output and stops there. It passes forever while every other language drifts, because English is the one case that matches the source strings.
+The obvious test checks the English output and stops. It keeps passing while every other language drifts, because English is the one language that matches the source strings.
 
-The opposite instinct fails too. Snapshot every language against every intent against every clock and you get one enormous file. A real one-language change buries itself in a regeneration that rewrites the whole thing. Nobody reads a seventy-thousand-line diff; they approve it and move on, which is the same as having no test.
+Going the other way fails too. If we snapshot every language, every intent, and both clocks together, we get one enormous file. A real change to one language gets buried when the whole file is regenerated. Nobody reads a seventy-thousand-line diff. They approve it and move on, and then the test isn't protecting anything.
 
-The date path here is a rulebook: every user-visible date string flows through one enum of intents, each mapped to a render plan by one exhaustive switch (the design is its own [post](/date-format-rulebook/)). A rulebook is only trustworthy if a change to it produces a diff a human can read. This post covers the snapshot layer that makes that true, plus a second test tier that runs the same checks in six seconds without being allowed to corrupt them. It picks up where [porting the snapshot ergonomics](/port-the-ergonomics-not-the-library/) left off: the same drop-in file-snapshot helper, pointed at a full localization matrix and then made fast.
+In our app, every date string a user sees goes through one enum of intents (what the date is for: a daily header, a sunrise time) and one exhaustive switch that maps each intent to a format. We call that the date rulebook, and its design is its own [post](/date-format-rulebook/). We can only trust the rulebook if a change to it produces a diff a person can read. This post is about the snapshot tests that make that true, and about a second, faster test run that checks the same files in six seconds but isn't allowed to change them. It continues from [porting the snapshot ergonomics](/port-the-ergonomics-not-the-library/): the same small file-snapshot helper, now pointed at the full language matrix and then made fast.
 
 ## The Solution
 
-Two rules, one for each trap above.
+Two rules, one for each trap.
 
-**Give every language-sweeping suite one golden file per language, generated from `allCases`.** Not one file for the matrix, one per language, named by the language code, each holding that language's full grid. A change to German touches `..._blessed_snapshot__de.snap.txt` and nothing else, so a German rendering change gets a German-sized diff.
-
-**Let the fast test tier read the goldens but never write them.** A six-second run is worth having for iteration, but only if it can never become the thing that blesses a change. The slow, app-hosted, on-device-font run stays the single source of truth. The fast tier compares against it and reports disagreement rather than resolving it.
-
-Together, the matrix gets reviewed like copy and iterated on like unit tests.
+- **One golden file per language, generated from `allCases`.** Every test that sweeps the languages writes one file per language, named by the language code, holding that language's whole grid. A German change touches `..._blessed_snapshot__de.snap.txt` and nothing else, so it gets a German-sized diff.
+- **The fast run reads the goldens but never writes them.** A six-second run is good for iterating, but only if it can't become the thing that approves a change. The slow run, hosted in the app on a simulator with the real device font, stays the single source of truth. The fast run compares against those files and reports a disagreement. It doesn't settle one.
 
 ### One file per language, generated from `allCases`
 
-Language is the axis a rendering change moves along, so it is the axis the files split on. The matrix suite loops over every language and every intent and writes one snapshot per language:
+We split the files by language because that's how rendering changes arrive: one language at a time. The matrix test loops over every language and every intent and checks one snapshot per language:
 
 {% raw %}
 ```swift
@@ -115,7 +112,7 @@ struct DateFormatSnapshotTests {
 ```
 {% endraw %}
 
-Two `allCases` drive the whole matrix. Add a `DateFormatIntent` case and every language file grows a row on the next record; add a `Language` and a new file appears. No separate list of things to test can fall out of sync with the feature. Rows are the intents, columns are the two instants crossed with the two clocks, so a German file reads like a table:
+The two `allCases` loops drive the whole matrix. Add a `DateFormatIntent` case and every language file grows a row the next time we record. Add a `Language` and a new file appears. There's no separate list of things to test that can fall behind the feature. Rows are the intents and columns are the two sample instants crossed with the two clocks, so the German file reads like a table:
 
 ```
 intent | morning 12h | evening 12h | morning 24h | evening 24h
@@ -125,11 +122,11 @@ forecastUpdatedDateTime | Mi., Jan. 7 @ 9:05am | Sa., Aug. 15 @ 5:39pm | Mi., Ja
 complicationHour | 9am | 5pm | 9 | 17
 ```
 
-Two details make the file safe to trust. The `#expect(!cells.contains(""))` guard fails the record when a rendering path returns an empty string. Blank output is the one result a snapshot must never accept: it looks like success, reads like nothing, and usually means a missing symbol or a nil that fell through. The `escaped` helper handles the other silent case. Localized date strings are full of invisible characters: narrow no-break spaces, directional marks, and the format-category scalars ICU inserts between numerals and symbols. Rendered raw, a normal space turning into a narrow no-break space is invisible in a diff. Escaped, with the letters left legible, it shows up as a readable `\u{202F}`.
+Two details make the file safe to trust. The `#expect(!cells.contains(""))` check fails the run when a rendering path returns an empty string. A snapshot must never accept blank output, because it looks like success and usually means a missing symbol or a nil that fell through. The `escaped` helper handles the other quiet failure. Localized date strings carry characters you can't see, like the narrow no-break space ICU puts between a number and its symbol. In a raw diff, a normal space turning into a narrow no-break space is invisible. Escaped, it shows up as `\u{202F}`, and the letters around it stay readable.
 
 ### The assertion that reads the file, and the guard that stops CI from writing
 
-The suite is only as trustworthy as the helper under it. It has to get two things right: a regeneration must never feel like a rubber stamp, and an automated environment must never record a golden it should only compare. It is small enough to read whole:
+The test is only as trustworthy as the helper under it. The helper has to get two things right. Regenerating a golden must never feel like a rubber stamp, and CI must never record a golden it should only compare against. It's small enough to read whole:
 
 ```swift
 import Foundation
@@ -208,19 +205,19 @@ func assertMatchesSnapshot(
 }
 ```
 
-Notice what the drift message does. It names at most eight differing lines, not the whole file. It carries the exact regenerate command. And it says *review every changed line* rather than *rerun to fix*, because a regeneration is a set of user-visible edits somebody has to sign off on. Every line that moves in a golden is a change a person approved.
+The drift message does three things. It shows at most eight differing lines, not the whole file. It includes the exact regenerate command. And it says *review every changed line* rather than *rerun to fix*, because every changed line in a golden is a change to what users see, and someone has to sign off on it.
 
-The `locked` guard is the other half. Locally, a missing golden is recorded on first run and an update request rewrites it; that auto-recording is a convenience for a developer on a branch. When `CI` is set, both paths fail instead of writing. Otherwise a missing golden in an automated environment would be silently written as correct, and a real regression would record itself as the new truth.
+The `locked` guard is the other half. On a developer's machine, a missing golden gets recorded on the first run, and `UPDATE_SNAPSHOTS=1` rewrites it. When `CI` is set, both of those fail instead of writing. Without that guard, CI would quietly write a missing golden as correct, and a real regression would record itself as the new expected output.
 
 ### Width probes store strings, not widths
 
-The same one-file-per-language shape carries three other sweeps: the "x ago" relative-time strings, the CLDR unit-conformance tables, and the width probes. The width probes answer a pixel question, will the widest rendering fit the slot, and yet store no pixel measurement. For each intent and clock the suite finds the widest-rendering string across a probe set, selecting by the real device font but storing the winning *string*, never its width. A point width drifts with OS versions, font revisions, and rendering hosts, so a golden built on it would fail for reasons unrelated to the app. The string it chose is stable: the file records that in German the widest daily-full-header is `Donnerstag, Sept. 24`, which any tier on any machine can compare byte for byte.
+Three other sweeps use the same one-file-per-language shape: the "x ago" relative-time strings, the CLDR unit-conformance tables, and the width probes. The width probes answer a pixel question, whether the widest rendering fits its slot, but they don't store any pixel measurement. For each intent and clock, the test renders a set of candidate dates in the real device font, finds the widest one, and stores that *string*. It never stores the width. A width in points changes with OS versions, font revisions, and which machine is rendering, so a golden built on it would fail for reasons that have nothing to do with the app. The chosen string is stable. The German file records that the widest daily full header is `Donnerstag, Sept. 24`, and any test run on any machine can compare that.
 
-### The fast tier that reads the goldens but cannot rewrite them
+### The fast run that reads the goldens but cannot rewrite them
 
-The app-hosted run is the authoritative gate. It builds the app scheme, signs it, boots a simulator, and measures the real device font. It also takes about forty seconds warm, too slow for iterating on a pure-logic file like the date rulebook. So a second tier compiles a subset of sources plus the pure-logic and snapshot suites into a macOS-hosted bundle, with no simulator, host, or signing, and runs in about six seconds.
+The app-hosted run is the one that counts. It builds the app, signs it, boots a simulator, and measures text in the real device font. It also takes about forty seconds warm, which is too slow for iterating on a pure-logic file like the date rulebook. So we added a second run that compiles a subset of the sources, plus the logic and snapshot tests, into a macOS test bundle. No simulator, no app host, no signing, and it finishes in about six seconds.
 
-Two tiers now read the same goldens. If the fast one could *write* them, it could rebase the source of truth to whatever macOS ICU renders, which can differ from iOS ICU by a locale or two. The unsigned, hostless tier would be defining reality for the authoritative one. So the runner refuses the record flag and strips the record environment variable before it runs anything:
+Now two runs read the same goldens. If the fast one could *write* them, it could reset the source of truth to whatever macOS ICU renders, and macOS ICU differs from iOS ICU in a locale or two. The unsigned macOS run would be deciding what's correct for the iOS one. So the fast script refuses the update flag and unsets the update variable before it runs anything:
 
 ```bash
 #!/bin/bash
@@ -249,24 +246,24 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-A passing fast run reads the same committed goldens and renders them identically, so it produces zero diffs and zero re-records. When it disagrees, that is not a bug to paper over by recording on macOS. It is a signal that macOS and iOS ICU diverge for some locale, and the fix is to drop that suite from the macOS bundle and keep it on the authoritative tier only. The fast tier buys its speed by giving up any claim to authority.
+When the fast run passes, it rendered the committed goldens the same way iOS did, and nothing gets rewritten. When it disagrees, we don't fix that by recording on macOS. It means macOS and iOS ICU differ for some locale, and the fix is to drop that test from the macOS bundle and keep it on the app-hosted run only.
 
 ## Results
 
-- About 111 committed golden files, ~564K total, across six suites, regenerated only on device and reviewed as copy.
-- A one-language rendering fix produces a one-language diff instead of a full-matrix regeneration to scan for the rows that moved.
-- Iterating on the date rulebook dropped from a ~40-second app-hosted cycle to a ~6-second macOS one, on the identical goldens. The trade-off: a suite where macOS ICU and iOS ICU diverge leaves the fast bundle and runs only on the slow tier.
-- An empty rendered cell and a CI-time missing snapshot both stop the run, instead of recording themselves as expected.
+- About 111 committed golden files, ~564K in total, across six test suites. They're only regenerated on the iOS run and reviewed like copy.
+- A fix to one language produces a one-language diff, instead of a whole-matrix regeneration we'd have to scan for the rows that moved.
+- Iterating on the date rulebook went from a ~40-second app-hosted cycle to a ~6-second macOS one, against the same goldens. The trade-off is that a suite where macOS and iOS ICU disagree leaves the fast bundle and runs only on the slow one.
+- An empty rendered cell and a missing snapshot under CI both fail the run instead of recording themselves as correct.
 
 ## Lessons Learned
 
-- **Treat a snapshot diff as a behavior change.** It is a copy edit, not a green-keeping chore. Make the failure message say "review every changed line," carry the regenerate command, and show only the first few differences.
+- **Treat a snapshot diff as a behavior change.** It's a copy edit, not a chore to get the build green. Have the failure message say "review every changed line," include the regenerate command, and show only the first few differences.
 
-- **Store the artifact a metric chose, not the metric.** When a measurement only selects among candidates, commit the candidate. The chosen string is stable across machines; the width that chose it is not.
+- **Store what the measurement picked, not the measurement.** When a number only chooses among candidates, commit the candidate. The chosen string is stable across machines and the width isn't.
 
-- **Escape the invisible characters.** Narrow spaces and directional marks are exactly the changes a raw diff hides. Escape whitespace and format scalars to `\u{...}` and leave the letters legible.
+- **Escape the invisible characters.** A raw diff hides a narrow space or a directional mark. Escape whitespace and format scalars to `\u{...}` and leave the letters readable.
 
-- **Never kill a language-cycling run mid-way.** The sweeps set the app language and restore it at the end. Stopping mid-flight strands the test store on a foreign language, and later runs fail the formatting suites until you clear it.
+- **Don't stop a language-cycling run partway.** The sweeps set the app language and restore it at the end. If you kill the run in the middle, the stored test settings stay on a foreign language, and later runs fail the formatting tests until you clear it.
 
 ---
 
@@ -279,3 +276,23 @@ Research by eight Claude agents across the iOS, web, and blog repos (string cata
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the silent failure instead of the product, the title lost its subtitle, each mechanism section says its part once, Results is what changed and what it cost, and Lessons Learned fell from seven bullets to the four the body does not already state. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The matrix suite's sample instants were 2025 epoch values that contradicted the German table (a Tuesday and a Friday, not the Wednesday and Saturday the goldens show); they are now the real 2026 component-built dates, and the loop uses the real set-and-restore `withAppLanguage` shape. The snapshot helper was rewritten to the real control flow (compare when a golden exists and no update is requested; otherwise record unless `CI` is set, which the earlier excerpt got backwards for a locally missing file), with the real camelCase-to-snake_case file naming and `test__name` filenames. The fast-tier script now carries the real refusal message and scheme names, and the unverifiable "hundreds of passes" count was dropped. All figures checked out: 111 files, 564K, six suites, 27 languages, 24 intents, ~40s versus ~6s, and the never-stop-a-language-cycling-run rule.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 2, run after batch 1 (#68) merged. The prose was redrafted from an ELI5 of the post: the two Solution rules became a list, the two test tiers are now "the app-hosted run" and "the fast run" throughout (the h3 was renamed to match), "24 surfaces" became "24 places" because surface is a retired word, and the closers ("That is a lot of ways to fail quietly", "The fast tier buys its speed by giving up any claim to authority") were cut. Code, numbers, links, headings, and facts are unchanged. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Prompt 9:** "usage looks fine, merge it and run batch 2"

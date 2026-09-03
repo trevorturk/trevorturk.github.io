@@ -2,31 +2,31 @@
 layout: post
 title: "Retries Your Vendor Already Billed"
 date: 2026-09-01 10:00:00 -0600
-summary: "An audit of how a Rails app drives async-http found three defaults nobody had set: the client makes up to three attempts on errors that can fire after a metered request was sent, an error-path cleanup call drains bodies with no timeout, and a pool limit that would add queueing instead of safety."
+summary: "We audited how our Rails app uses async-http and found three defaults nobody had chosen. The client tries a request up to three times, including on errors that can happen after a paid request already reached the vendor. Our error-path cleanup read the rest of the body with no timeout. And a pool limit, which sounded careful, would have added waiting instead of safety."
 tags: [ruby, async, async-http, falcon, http, api-design]
 ---
 
 ## The Problem
 
-`Async::HTTP::Client#call` makes up to three attempts per request by default, and some of the errors it retries on can fire after the request has already reached the server. For a GET against a weather vendor that bills per call, the second and third attempts are invoices the application never sees. The app's own hit counter records one hit per response that comes back to it, so a retried request looks like one call in the app's books and two or three in the vendor's.
+By default, `Async::HTTP::Client#call` tries each request up to three times. Some of the errors it retries on happen after the request has already reached the server. When the request is a GET to a weather vendor that bills per call, the second and third attempts are calls we pay for and never see. Our hit counter records one hit per response that comes back to us, so a retried request counts as one call in our books and two or three in the vendor's.
 
-[Hello Weather](https://helloweather.com) fetches every weather source through a single wrapper around async-http, running under Falcon (see [Falcon and Ruby Async](/falcon-async-performance/)). That wrapper had used the shared `Async::HTTP::Internet.instance` with library defaults since it was written. A search of the wrapper's history for the word `retries` returns nothing. Nobody had set the option, in either direction, because nobody had read the code path that used it.
+[Hello Weather](https://helloweather.com) fetches every weather source through one wrapper around async-http, running under Falcon (see [Falcon and Ruby Async](/falcon-async-performance/)). Since the day it was written, that wrapper had used the shared `Async::HTTP::Internet.instance` with the library defaults. Searching the wrapper's history for the word `retries` finds nothing. Nobody had set the option either way, because nobody had read the code that used it.
 
-What changed in August 2026 was the documentation. The async-http maintainer rewrote the client guides ([socketry/async-http#241](https://github.com/socketry/async-http/pull/241), [#242](https://github.com/socketry/async-http/pull/242), [#243](https://github.com/socketry/async-http/pull/243)). Rather than skim them, the team read the installed gem source against the guides, then against the app's usage. Three defaults came out of that reading, each with a verdict: change it, change it, leave it alone.
+In August 2026 the async-http maintainer rewrote the client guides ([socketry/async-http#241](https://github.com/socketry/async-http/pull/241), [#242](https://github.com/socketry/async-http/pull/242), [#243](https://github.com/socketry/async-http/pull/243)). We read the installed gem source alongside the new guides, then compared both with how our app uses the library. Three defaults came out of that reading. We changed two and left the third alone.
 
 ## The Solution
 
-The audit was recorded as a plan on August 21, 2026, verified against async-http 0.100.0 and its dependencies. Two pull requests carry the changes. One sets the retry count on a client the wrapper owns. The other switches the fetch to the block form so the response closes on every exit. The third verdict, on the connection pool limit, is a written won't-fix with a measurement recipe attached.
+We wrote the audit up as a plan on August 21, 2026, checked against async-http 0.100.0 and its dependencies. Two pull requests carry the changes. One sets the retry count on a client the wrapper owns. The other switches the fetch to the block form, so the response closes whether the block returns or raises. The third decision, on the connection pool limit, is a written won't-fix with a recipe for measuring the pool before anyone changes it.
 
 ### One attempt per vendor call
 
-The retry logic lives in `Async::HTTP::Client#call`, and at 0.102.0, the version in the app's lockfile as of September 1, it reads like this. A `Protocol::HTTP::RefusedError` means the server provably did not process the request: an HTTP/1 write failure, or an HTTP/2 GOAWAY or REFUSED_STREAM. Those retry for any method, because the request never landed. A second rescue clause covers `RemoteError`, `SocketError`, `IOError`, `EOFError`, `ECONNRESET`, and `EPIPE`. Those retry only for methods the request considers safe, which excludes POST, PATCH, and CONNECT, and includes GET.
+The retry logic lives in `Async::HTTP::Client#call`. At 0.102.0, the version in our lockfile as of September 1, it has two rescue clauses. The first catches `Protocol::HTTP::RefusedError`, which means the server did not process the request: an HTTP/1 write failed, or HTTP/2 answered with GOAWAY or REFUSED_STREAM. Those retry for any method, because the request never arrived. The second clause catches `RemoteError`, `SocketError`, `IOError`, `EOFError`, `ECONNRESET`, and `EPIPE`. Those retry only for methods the request considers safe. POST, PATCH, and CONNECT are not safe. GET is.
 
-That second group is the problem. A connection can drop while the client is waiting for headers or reading the response, after the server has fully received the request. Since 0.99.0 the client also retries when a remote HTTP/2 endpoint resets the stream with `INTERNAL_ERROR` before responding. In every one of those cases the origin may already have processed and billed the call. A CDN in front of the vendor absorbs retries on a warm cache, but a miss forwards each attempt to the origin.
+That second clause is the problem. A connection can drop while the client waits for headers or reads the body, after the server has already received the whole request. Since 0.99.0 the client also retries when an HTTP/2 server resets the stream with `INTERNAL_ERROR` before responding. In all of those cases the vendor may already have processed and billed the call. A CDN in front of the vendor absorbs a retry when the cache is warm, but on a miss each attempt goes through to the vendor.
 
-The alternative considered was an app-level retry on `RefusedError` alone, which is the only provably billing-safe form. It was deferred rather than built: first stop the library from retrying, watch what surfaces, and add the narrow retry only if the blips are material.
+We considered adding our own retry on `RefusedError` alone, the one error that can't cause a double charge. We put that off. The plan is to stop the library from retrying first, watch what errors show up, and add the narrow retry only if they matter.
 
-`retries:` is a client-construction option, not a per-request one, and `Internet.instance` takes no options. So the fix has to abandon the shared instance for vendor calls and hold an `Internet` the wrapper owns:
+`retries:` is set when a client is built, not per request, and `Internet.instance` takes no options. So vendor calls have to leave the shared instance, and the wrapper has to hold an `Internet` of its own:
 
 ```ruby
 require "async"
@@ -41,9 +41,9 @@ class VendorHttp
 end
 ```
 
-The thread-local scope is deliberate and the review thread spells out why. `Internet` keeps an unsynchronized hash of clients keyed by origin, and background job threads share this wrapper with the web server, so a class-level instance would race. Fiber-local would be worse in the other direction: Falcon runs each request as a fiber, so a per-fiber `Internet` would build a fresh connection pool per request and throw away the connection reuse the shared instance exists to provide. One instance per thread is the scope that is both safe and warm.
+The instance is one per thread, and the review thread explains why. `Internet` keeps a plain hash of clients keyed by host, with no lock around it. Background job threads share this wrapper with the web server, so one instance for the whole class would race. One per fiber would go wrong the other way. Falcon runs each request as a fiber, so a per-fiber `Internet` would open a fresh connection pool for every request and lose the connection reuse we wanted from the shared instance. One per thread is safe, and the connections stay warm.
 
-A value of `retries: 0` would behave identically, since the check is `attempt < @retries`, but `1` reads as what it means: one attempt. The test asserts the setting where it lands, on the client the `Internet` builds for an endpoint. `Internet` wraps each client in an `AcceptEncoding` middleware, so the assertion reaches through `delegate`:
+`retries: 0` would behave the same, because the check is `attempt < @retries`, but `1` says what it means: one attempt. The test checks the setting where it ends up, on the client the `Internet` builds for an endpoint. `Internet` wraps each client in an `AcceptEncoding` middleware, so the test reaches through `delegate`:
 
 ```ruby
 test "vendor clients make one attempt" do
@@ -54,21 +54,21 @@ test "vendor clients make one attempt" do
 end
 ```
 
-Other callers in the app, for push notifications and a newsletter service and App Store tooling, stay on `Internet.instance`. They POST, which the socket-error group never retries, and they are not billed per call.
+Other callers in the app stay on `Internet.instance`: push notifications, a newsletter service, App Store tooling. They send POSTs, which the second clause never retries, and none of them bill per call.
 
-What the code cannot enforce is the consequence. The library retries were silently absorbing real connection blips: an HTTP/2 GOAWAY when the CDN recycles a long-lived connection, a stale HTTP/1 keep-alive, a reset. With one attempt those surface as errors, and where no fallback source covers the call, as a failed user request. The plan calls this a visibility shift rather than a new failure, since the same exception classes already escaped once three attempts were spent. Going to one attempt changes their frequency, not what can escape.
+The code can't hide the cost. The library retries had been quietly covering real connection blips: an HTTP/2 GOAWAY when the CDN recycles a long-lived connection, a stale HTTP/1 keep-alive, a reset. With one attempt, those become errors. Where no fallback source covers the call, they become a failed user request. The plan calls this a change in visibility, not a new failure, because the same exceptions already escaped once three attempts were used up. One attempt changes how often they escape, not which ones can.
 
-The first draft of the PR pre-mapped those transport errors into the app's data-error class so they would land as 502s with a metric rather than 500s with an error report. The owner pushed back: that mapping was not in the brief, and the repository's rule is to rescue only what the error reporter has actually shown. Hiding the blips would hide exactly the signal the change was meant to surface. A smaller diff, 16 insertions and 6 deletions against the original 40 and 7, is ready as the replacement. As of September 1 the PR still carries the larger version, with the smaller one recorded in the thread as the next step.
+The first draft of the PR also mapped those transport errors into the app's data-error class, so they'd show up as 502s with a metric instead of 500s with an error report. The owner pushed back. That mapping wasn't in the brief, and the repository's rule is to rescue only errors the error reporter has actually shown. Hiding the blips would hide the signal the change was meant to expose. A smaller diff, 16 insertions and 6 deletions instead of the original 40 and 7, is ready to replace it. As of September 1 the PR still carries the larger version, and the thread records the smaller one as the next step.
 
-One more thing has moved since the plan was written. async-http 0.102.0 refuses requests assigned to an HTTP/2 connection that has already closed before writing them, and removes connections that received a graceful GOAWAY from availability while letting their accepted streams finish. Both turn cases that used to need a retry into cases that never fail, which shrinks the population of blips a single attempt will expose.
+One thing has changed since the plan was written. async-http 0.102.0 refuses a request before writing it if the HTTP/2 connection it was assigned has already closed. It also stops handing out connections that received a graceful GOAWAY, while letting their in-flight streams finish. Both changes turn cases that used to need a retry into cases that don't fail at all, so a single attempt will expose fewer blips.
 
 ### Close, do not drain, on the error path
 
-The wrapper's cleanup was an `ensure response&.finish` on the outer `Async` block. `finish` reads the rest of the body so the connection can be reused. `close` discards it. After a full `read` both are no-ops, so on the success path the choice never mattered.
+The wrapper cleaned up with `ensure response&.finish` on the outer `Async` block. `finish` reads the rest of the body so the connection can be reused. `close` throws the rest away. After a full `read` both do nothing, so on the success path the choice never mattered.
 
-On every error path it did. When the wrapper raises on a non-2xx status, a parse error, or a timeout, the body is unread, and `finish` drains it with no timeout in force. The `ensure` belongs to the `Async` block, not to `task.with_timeout`, so the deadline that abandoned the request has already fired by the time the drain starts. For HTTP/1 the drain is a length-bounded read of whatever error page the vendor sent. For HTTP/2 the body is a writable queue: `read` is a `Queue#pop`, the timeout sent no RST_STREAM, and the pop blocks until the vendor concludes the stream. That parks the request fiber for as long as the vendor takes.
+On every error path it did. When the wrapper raises on a non-2xx status, a parse error, or a timeout, the body is still unread, and `finish` reads it with no timeout running. The `ensure` belongs to the `Async` block, not to `task.with_timeout`, so the deadline that gave up on the request has already fired before the read starts. For HTTP/1 that read is bounded by the length of whatever error page the vendor sent. For HTTP/2 the body is a queue that the connection writes into. `read` is a `Queue#pop`, the timeout sent no RST_STREAM, and the pop blocks until the vendor ends the stream. The request fiber sits there for as long as the vendor takes.
 
-The one-line fix would swap `finish` for `close`. The owner chose the block form of `Internet#get` instead, because it is the maintainer's current idiom and it closes on exit whether the block returns or raises. The `Internet#call` source is short: `yield response` inside a `begin`, `response.close` in the `ensure`. The wrapper with both changes applied, trimmed to the fetch path and with the app's logging and CDN header checks removed:
+The one-line fix would swap `finish` for `close`. The owner chose the block form of `Internet#get` instead, because it's the maintainer's current idiom and it closes the response whether the block returns or raises. The `Internet#call` source is short: `yield response` inside a `begin`, `response.close` in the `ensure`. Here is the wrapper with both changes applied, trimmed to the fetch path, with our logging and CDN header checks removed:
 
 ```ruby
 require "async"
@@ -125,17 +125,17 @@ class VendorHttp
 end
 ```
 
-The line to notice is `status = response.status` at the top of the block. The response object is gone by the time the outer `rescue` runs, so the status is hoisted into a local before anything can raise. The old version kept the whole response in an outer variable for the same reason, which is what made the trailing `finish` possible in the first place.
+The line to notice is `status = response.status` at the top of the block. By the time the outer `rescue` runs, the response object is gone, so the status is copied into a local before anything can raise. The old version kept the whole response in an outer variable for the same reason, and that is why a trailing `finish` was possible at all.
 
-The cost is small and correct: on an error path an HTTP/1 keep-alive socket is dropped instead of drained, which is what should happen to a connection whose response the app abandoned. The rewrite also had to move the development request log so it starts before the request and completes on headers, because a test helper infers parallel-versus-serial execution from the timing of those log lines. That coupling is the kind of thing a refactor of a client wrapper finds only by running the suite.
+The cost is small. On an error path, an HTTP/1 keep-alive socket is dropped instead of drained, which is the right thing to do with a connection whose response we abandoned. The rewrite also had to move the development request log, so it starts before the request and finishes when headers arrive, because a test helper works out whether requests ran in parallel or in series from the timing of those log lines. We only found that coupling by running the suite.
 
 ### Leave the pool limit unset
 
-The third default is the per-origin connection pool's `limit`, which the app has never set. The guides discuss it, and setting one sounds like the careful choice. The audit's verdict was the opposite.
+The third default is the `limit` on each host's connection pool, which we've never set. The guides discuss it, and setting one sounds like the careful choice. The audit said the opposite.
 
-With `limit: nil`, `Async::Pool::Controller#acquire` never waits. If no connection is available it opens another. Setting a limit is what introduces a wait: a fiber-aware condition wait with no timeout of its own, which would surface as the app's own two-second request timeout during exactly the traffic bursts where a limit would bind. In production every origin is fronted by its own CDN host that negotiates HTTP/2, at 128 streams per connection, so pools already sit at about one connection each, and a source's burst is one to five concurrent requests. There is no idle reaper without a pool policy. HTTP/1 connections persist until the peer drops them and are retired lazily by the viability probe added in 0.98.1.
+With `limit: nil`, `Async::Pool::Controller#acquire` never waits. If no connection is free, it opens another. A limit adds a wait: a fiber-aware condition wait with no timeout of its own. That wait would show up as our own two-second request timeout, during exactly the traffic bursts where a limit would kick in. In production every vendor sits behind its own CDN host, which negotiates HTTP/2 at 128 streams per connection. So each pool already holds about one connection, and a source's burst is one to five requests at once. Without a pool policy there is nothing that closes idle connections. HTTP/1 connections stay open until the other side drops them, and the viability probe added in 0.98.1 retires them lazily.
 
-The plan records the trigger for revisiting this, socket exhaustion or a vendor complaining about connection counts, and insists the first action is measurement. The recipe logs each origin's pool from the request path during a spike:
+The plan says when to revisit this: if we run out of sockets, or a vendor complains about connection counts. Even then, the first step is to measure. The recipe logs each host's pool from the request path during a spike:
 
 ```ruby
 VendorHttp.internet.clients.each do |key, wrapper|
@@ -143,22 +143,22 @@ VendorHttp.internet.clients.each do |key, wrapper|
 end
 ```
 
-The pool's `inspect` shows usage over capacity per connection. A capacity of 128 means HTTP/2, a capacity of 1 means HTTP/1. Only an HTTP/1 pool growing to tens of connections would justify a limit, set above the observed healthy burst.
+The pool's `inspect` shows usage over capacity for each connection. A capacity of 128 means HTTP/2. A capacity of 1 means HTTP/1. Only an HTTP/1 pool growing to tens of connections would justify a limit, and the limit would go above the biggest healthy burst we'd seen.
 
 ## Results
 
-- Neither PR has merged. Both were opened on August 21, 2026 and were still open as of September 1. The retries PR was closed as won't-fix on August 31, bundled into a stand-down of unrelated vendor work, and reopened the same day once the billing rationale was separated from that work.
-- The exposure is real but, so far, theoretical. No vendor invoice shows material duplicate billing. The only candidate signal is one vendor whose invoice runs about 1% above the app's own counter, a gap that is stable and watched monthly.
-- The measured cost of shipping is visibility: a few more connection-level errors in the error reporter, judged against a residual of roughly 20 to 50 bad-gateway errors a day. The plan's watch period is two weeks after deploy.
-- The audit produced four operating rules for the source-fetching skill, to be moved there when the plan closes: one attempt per vendor fetch, fetch through the block form, leave the pool limit unset, and run the Falcon line-length test on any async-http or protocol-http1 bump.
+- Neither PR has merged. Both opened on August 21, 2026 and were still open as of September 1. The retries PR was closed as won't-fix on August 31, swept up in a stand-down of unrelated vendor work, and reopened the same day once the billing reason was separated out.
+- The risk is real, but so far we haven't seen it. No vendor invoice shows meaningful duplicate billing. The one possible sign is a vendor whose invoice runs about 1% above our own counter. That gap is stable, and we check it monthly.
+- The cost of shipping is a few more connection errors in the error reporter, on top of the roughly 20 to 50 bad-gateway errors a day we already see. The plan says to watch for two weeks after deploy.
+- The audit produced four rules for the source-fetching skill, to be moved there when the plan closes: one attempt per vendor fetch, fetch through the block form, leave the pool limit unset, and run the Falcon line-length test on any async-http or protocol-http1 bump.
 
 ## Lessons Learned
 
-- A client default is a decision someone made for you. If your history has no commit touching it, you have not made it yet.
-- Retry only on errors that prove the server never processed the request. Any error that can fire after the request was sent is a possible duplicate charge.
-- Read the gem source for the option's scope before designing the fix. A construction-time option on a shared instance forces you to own an instance.
-- On an error path, close the response instead of draining it. A drain with no deadline is a wait of unbounded length on someone else's server.
-- A limit on a pool that never waits does not add safety. It adds a wait, and the wait needs its own timeout.
+- If no commit in your history sets a client option, you've been running on someone else's choice. Read the code path that uses it.
+- Retry only on errors that prove the server never got the request. Any error that can happen after the request was sent might mean a duplicate charge.
+- Before designing the fix, read the gem source to see where the option is set. If it's set when the client is built and the client is shared, you'll need your own client.
+- On an error path, close the response instead of reading the rest of it. Reading with no deadline means waiting as long as the other server takes.
+- A limit on a pool that never waits doesn't add safety. It adds a wait, and that wait needs its own timeout.
 
 ---
 
@@ -171,3 +171,23 @@ The pool's `inspect` shows usage over capacity per connection. A capacity of 128
 Generated by Claude Fable 5.1 using the blog-post-generator skill. One agent ran a research pass over the web repository looking for material relevant to Falcon and async-http users and proposed this post as a candidate; a second agent verified the claims and wrote it. Sources: the async-http client hygiene plan (decisions dated 2026-08-21), the two open pull requests and their review thread (opened 2026-08-21, one closed and reopened 2026-08-31), the client wrapper and source base class, and the installed gem source for async-http 0.102.0, async-pool 0.12.0, and protocol-http 0.71.0, read directly to confirm the retry clauses, the `Internet#call` block form, `Pool::Controller#acquire`, and the writable body's `read`.
 
 Judgment calls: the code block combines both pull requests into one wrapper and is trimmed and renamed, which the post says; the app's transport-error mapping is described as the reviewed-and-rejected first draft rather than shown, since the smaller replacement is not yet pushed. The 1% invoice gap is attributed to "one vendor" without a name. The vendors on the shared instance are described by what they do, not by product. The gem version note (plan verified at 0.100.0, lockfile at 0.102.0) was added after reading the 0.102.0 release notes and confirming the retry logic is unchanged.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 2, run after batch 1 (#68) merged. Every paragraph and the summary were redrafted from an ELI5 of the post; code, headings, numbers, links, and facts are unchanged. Judgment calls: "surface" as a verb was replaced in four places with "show up" or "expose"; "origin" was replaced with "vendor" or "host" so each thing keeps one name; the two quotable closers ("the scope that is both safe and warm", "a decision someone made for you") were restated as plain rules. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Prompt 9:** "usage looks fine, merge it and run batch 2"

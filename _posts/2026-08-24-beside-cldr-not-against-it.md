@@ -2,27 +2,27 @@
 layout: post
 title: "Beside CLDR, Not Against It"
 date: 2026-08-24 09:10:00 -0600
-summary: "How to compare an app's compact unit strings against ICU/CLDR's canonical forms without a pass/fail test fighting your product voice: emit one descriptive report per language, adjudicate every divergence in a dated header, and review the diff like a copy change."
+summary: "We compare our compact unit strings with what CLDR says each language does, without a pass/fail test that fights our own style: one report per language, a dated header listing the differences we chose, and a person reading the diff like a copy change."
 tags: [swift, ios, localization, i18n, testing]
 ---
 
 ## The Problem
 
-A deliberately glued Turkish speed abbreviation and a wrong Turkish speed abbreviation look identical in a diff. After one person translated [Hello Weather](https://helloweather.com) into 27 languages with a model and no agency, the app's compact unit strings and the Unicode CLDR disagreed everywhere, and nobody could say which disagreements were the house voice and which were mistakes. Which of those 27 languages each upstream data source could actually serve was a separate fight, covered in [Never Trust the Vendor's Language List](/probing-vendor-language-support/).
+A Turkish speed abbreviation we glued to the number on purpose and a Turkish speed abbreviation that's wrong look the same in a diff. One person translated [Hello Weather](https://helloweather.com) into 27 languages with a model and no agency. After that, our compact unit strings disagreed all over the place with CLDR, the Unicode locale data that says how each language writes units. Nobody could say which disagreements were our style and which were mistakes. Whether each upstream data source could serve those 27 languages was a separate fight, covered in [Never Trust the Vendor's Language List](/probing-vendor-language-support/).
 
-The house voice is dense on purpose. A wind reading is `12km/h`, glued, where most locales' CLDR form is `12 km/h`. Pressure is `1013hPa`, with none of the digit grouping CLDR adds (`1,013hPa` in English, `1.013 hPa` in German). A temperature is `72°` with no `C` or `F`, because the unit is a global setting the user already picked and repeating it on every reading is noise. Each of these was decided string by string, to fit stat cards and a watch complication with room for a couple of characters.
+Our style is dense on purpose. A wind reading is `12km/h`, with no space, where most languages' CLDR form is `12 km/h`. Pressure is `1013hPa`, without the digit grouping CLDR adds (`1,013hPa` in English, `1.013 hPa` in German). A temperature is `72°` with no `C` or `F`, because the user already picked the unit in settings and repeating it on every reading is noise. We decided each of these string by string, to fit stat cards and a watch complication with room for a couple of characters.
 
-Apple hands you a correct localizer for free. `MeasurementFormatter` and `Duration.UnitsFormatStyle` render units the way CLDR says a given locale renders them: `12mph` in English but `12 mi/h` in German and `12 ми/ч` in Russian, `1.013 hPa` with a locale-grouped thousands separator in German, a non-breaking space between number and unit in Finnish and French, and the CLDR minus sign U+2212 before negative temperatures in Finnish, Swedish, and Norwegian. For most apps that canonical rendering is exactly what you want. The compact idiom walks away from it in dozens of small ways across 27 languages, and once you walk away from the platform's correct answer, nothing checks your answer anymore. You took on the localizer's job and lost the localizer's test.
+Apple already ships a correct localizer. `MeasurementFormatter` and `Duration.UnitsFormatStyle` render units the way CLDR says each locale does. English gets `12mph`, German `12 mi/h`, Russian `12 ми/ч`. German groups the thousands: `1.013 hPa`. Finnish and French put a non-breaking space between the number and the unit. Finnish, Swedish, and Norwegian put the CLDR minus sign, U+2212, before a negative temperature. For most apps that's what you want. Our compact style walks away from it in dozens of small ways across 27 languages, and once we walked away from the platform's answer, nothing checked ours. We had taken over the localizer's job without its tests.
 
-The naive fix is a conformance test asserting your string equals the CLDR string. It fails on the first row, because you diverge on purpose. So you add an exception, then a hundred exceptions, and every time the product voice and CLDR disagree the build breaks and someone has to decide whether the app is wrong or the test is stale. A gate that fights the product on every run is a gate nobody trusts. The other naive fix is no test at all: eyeball English and ship, which is how a wrong decimal separator reaches a Russian user.
+The obvious fix is a test that asserts our string equals the CLDR string. It fails on the first row, because we differ on purpose. So we'd add an exception, then a hundred, and every time our style and CLDR disagree the build breaks and someone has to decide whether the app is wrong or the test is stale. Nobody trusts a test that fights the product on every run. The other obvious fix is no test at all: check English by eye and ship, which is how a wrong decimal separator reaches a Russian user.
 
-We wanted a third thing: our form beside CLDR's for every unit in every language, with a verdict on each row, that never blocks a build and never argues with a decision we already made.
+We wanted a third thing: our form next to CLDR's for every unit in every language, with a verdict on each row, that never blocks a build and never argues with a decision we already made.
 
 ## The Solution
 
-A descriptive conformance report, not a pass/fail gate. `CLDRConformanceTests` is blessed as one snapshot file per language, 27 files. For every unit-bearing rendering the app shows, a row pairs our form against what ICU/CLDR renders for the same unit and locale, verdicted `MATCH` or `DIFFERS` by exact string equality. It is a review aid, not an assertion.
+We wrote a report, not a pass/fail test. `CLDRConformanceTests` writes one snapshot file per language, 27 files, and we commit them. Each row pairs one of our unit strings with what ICU/CLDR renders for the same unit and locale, and marks it `MATCH` or `DIFFERS` by exact string equality. It's something to read, not something that fails.
 
-The rows group into seven sections that map to what the app renders: WIND, VISIBILITY, PRESSURE, PRECIP, TEMP, PERCENT, and DURATIONS. Here are the dispositions header and first section of the German file, as they land in the blessed snapshot (a short legend precedes the header):
+The rows sit in seven sections, one per kind of thing the app shows: WIND, VISIBILITY, PRESSURE, PRECIP, TEMP, PERCENT, and DURATIONS. At the top of each file is a header listing the families of differences we chose on purpose; the file calls them dispositions. Here are that header and the first section of the German file, as committed (a short legend comes before the header):
 
 ```
 Dispositions (Trevor, 2026-08-07) — deliberate DIFFERS families, all intended:
@@ -44,17 +44,17 @@ Dispositions (Trevor, 2026-08-07) — deliberate DIFFERS families, all intended:
 | gust range mph (endpoints) | 12-18mph   | 12 mi/h–18 mi/h | DIFFERS |
 ```
 
-Every `DIFFERS` there is intended, and the report's job is not to turn them green. Its job is that when a row you did *not* mean to change flips from `MATCH` to `DIFFERS`, a human sees it in a diff and asks why.
+Every `DIFFERS` there is intended, and the report's job isn't to turn them green. Its job is to make a row we didn't mean to change show up in a diff when it flips from `MATCH` to `DIFFERS`, so a person asks why.
 
 > A gate answers "is this allowed?" A report answers "is this what you meant?" For deliberate style divergence, the second question is the only useful one, and only a human can answer it.
 
-Three design decisions make the report trustworthy.
+Three decisions make the report worth trusting.
 
-### Replicate production composition, never read the app's singletons
+### Rebuild the string from source data, don't call the app's helpers
 
-The tempting shortcut is to call the app's own formatting helpers inside the test and print what they return. Do that and you are not comparing production rendering to CLDR. You are comparing your test host's configuration of those helpers to CLDR, and the two drift the instant a helper reads a setting the test host does not have.
+The tempting shortcut is to call the app's own formatting helpers inside the test and print what they return. Then you're not comparing what production renders with CLDR. You're comparing how the test host configured those helpers with CLDR, and the two drift as soon as a helper reads a setting the test host doesn't have.
 
-So the report rebuilds the rendering from the same source data production uses. In this app the unit strings are server-composed: the backend glues a bare number to a localized unit symbol and a locale decimal separator, both read from the web repo's locale files. The report reproduces that gluing, renders the CLDR side with the platform formatters, and returns one verdicted row per unit. Everything below compiles against Foundation alone:
+So the report rebuilds each string from the same source data production uses. In this app the server composes the unit strings: it glues a bare number to a localized unit symbol and a decimal separator, both read from the web repo's locale files. The report does the same gluing, renders the CLDR side with Apple's formatters, and returns one row per unit. Everything below compiles against Foundation alone:
 
 ```swift
 import Foundation
@@ -102,13 +102,13 @@ func conformanceRows(language: String) -> [ConformanceRow] {
 }
 ```
 
-The `ours` cell is built by string composition and the `cldr` cell by the real Apple formatters, so the row measures production shape against the platform, not one helper against another. The row carries no verdict; the report computes it after the visualization step below, so hidden characters count.
+The `ours` cell comes from string gluing and the `cldr` cell from the real Apple formatters, so the row compares what production shows with the platform, not one helper with another. The row has no verdict yet. The report computes it after the step below, so hidden characters count.
 
-### Make the invisible characters legible
+### Make the invisible characters visible
 
-The divergences that hurt most are the ones you cannot see. A non-breaking space (U+00A0, or its narrow cousin U+202F) is identical to a regular space in any diff viewer. The CLDR minus sign (U+2212) reads as a hyphen. If the report prints those glyphs raw, a reviewer scanning the diff sees `45 %` beside `45 %`, reads `MATCH`, and misses a hidden NBSP.
+The differences that hurt most are the ones you can't see. A non-breaking space (U+00A0, or the narrow one, U+202F) looks like a regular space in any diff viewer. The CLDR minus sign (U+2212) looks like a hyphen. If the report printed those characters raw, a reviewer would see `45 %` next to `45 %`, read it as a match, and miss the hidden non-breaking space.
 
-So every cell runs through a visualizer that turns confusable scalars into visible tokens, before the comparison and before printing. It depends on nothing but the standard library:
+So every cell goes through a function that swaps those characters for visible marks, before the comparison and before printing. It needs nothing but the standard library:
 
 ```swift
 func visualize(_ string: String) -> String {
@@ -122,17 +122,17 @@ func visualize(_ string: String) -> String {
 }
 ```
 
-Now the Russian percent row reads honestly: `45%` versus `45⍽%`, and the `DIFFERS` verdict is plainly about that `⍽`. The Russian visibility row shows `5000м` versus `5⍽000 м`, surfacing the grouping separator and the space at once. Because equality is decided after this transform, the glyph difference is what the verdict is about.
+Now the Russian percent row reads `45%` next to `45⍽%`, and the `DIFFERS` verdict is plainly about that `⍽`. The Russian visibility row reads `5000м` next to `5⍽000 м`, which shows the grouping separator and the space at once. The verdict is computed after this swap, so it's about the characters the reviewer can see.
 
-### Adjudicate every deliberate divergence in the file itself
+### List every deliberate difference in the file itself
 
-A report full of `DIFFERS` is worthless if a reviewer cannot tell an intended divergence from a regression. That is what the dated dispositions header at the top of every file is for, shown in the German excerpt above: each family of deliberate divergence, named, with its reason, signed and dated by the owner.
+A report full of `DIFFERS` is useless if a reviewer can't tell an intended difference from a regression. The dispositions header at the top of every file, shown in the German excerpt above, is there for that: each family of deliberate difference, named, with its reason, signed and dated by the owner.
 
-That list is the review contract. A `DIFFERS` row under a listed family is expected and needs no thought. A row that flips and is *not* covered by a disposition is the signal. The dispositions live in the generated snapshot, so they travel with the data and land in every diff instead of a wiki nobody opens. The last bullet is a genuine open question, adopt U+2212 or keep the hyphen-minus, parked in the file where it stays visible.
+That list is the rule for review. A `DIFFERS` row under a listed family is expected and needs no thought. A row that flips and isn't covered by the list is the signal. The list lives in the generated file, so it lands in every diff instead of in a wiki nobody opens. The last bullet is an open question, adopt U+2212 or keep the hyphen-minus, and it sits in the file where it stays visible.
 
 ### How it runs
 
-The report is a snapshot test, gated on an environment variable so it runs only when asked and never under CI. The snapshot helper compares against the committed file, records a missing one locally, refuses to record under CI, and rewrites the file when blessing. The human reading the diff is the check, not the assertion (the snapshot path is simplified here):
+The report is a snapshot test behind an environment variable, so it runs only when asked and never under CI. The snapshot helper compares the output with the committed file. If the file is missing, it writes one locally but refuses to under CI. With `UPDATE_SNAPSHOTS=1` it rewrites the file. The person reading the diff is the check, not the assertion (the snapshot path is simplified here):
 
 ```swift
 import Foundation
@@ -188,21 +188,21 @@ struct CLDRConformanceTests {
 }
 ```
 
-Notice the two guards on `reportsEnabled`: the report never runs unless `CLDR_REPORTS` is set, and it bails under CI so it never blocks a build. The verdict is recomputed on the visualized cells, so the invisible characters decide it. You regenerate the files with `bin/cldr-report`, a wrapper that converts the web repo's locale YAML to JSON in a temp directory, forwards it so the server-composed rows fill in, and delegates to the test runner. Without a web checkout those rows read `(web checkout absent)` rather than failing. Blessing an intended change is `bin/cldr-report --update-snapshots`, then reviewing the regenerated per-language diff exactly like a copy change. It is the same discipline as our on-device width report in [Measure the String Before You Translate It](/rendered-width-validation/): the report is not the gate, the human reading the diff is.
+Notice the two guards on `reportsEnabled`: the report doesn't run unless `CLDR_REPORTS` is set, and it stays off under CI so it can't block a build. The verdict is computed on the swapped cells, so the invisible characters decide it. You regenerate the files with `bin/cldr-report`. That wrapper converts the web repo's locale YAML to JSON in a temp directory, passes it along so the server-composed rows fill in, and hands off to the test runner. Without a web checkout those rows read `(web checkout absent)` instead of failing. To accept an intended change, you run `bin/cldr-report --update-snapshots` and review the regenerated diff for each language the way you'd review a copy change. It's the same habit as our on-device width report in [Measure the String Before You Translate It](/rendered-width-validation/): the report isn't the gate; the person reading the diff is.
 
 ## Results
 
-- **27 blessed snapshot files**, one per language, seven unit families, roughly two dozen verdicted rows each. The steady state is no unexplained divergence: every remaining `DIFFERS` is either fixed or adjudicated in the header.
-- **Five languages' speed abbreviations were wrong**, not house voice: Turkish, Danish, Dutch, Indonesian, and Norwegian. A Turkish user flagged `km/h` the day after the localization launch; the table agreed (`km/sa`) and showed the other four. A gate would have buried them under exceptions. Beside CLDR they were legible as errors, and we adopted CLDR's abbreviations for all five.
-- **A run of server fixes followed** once divergences sat side by side: Scandinavian miles moved to CLDR forms, wind speed picked up CLDR symbols for km/h and m/s, composed decimals switched from a hard-coded dot to the locale separator, and Cyrillic and Greek unit symbols were localized.
-- **Zero CI cost, zero false alarms.** Descriptive and env-gated, it never runs on CI, never flakes, and never asks an engineer to relitigate a product decision. The trade-off is that nothing fails on its own: a regression surfaces only when someone regenerates the report and reads the diff, which is why the repo's agent instructions make `bin/cldr-report` part of the done gate for any unit-string change.
+- **27 committed snapshot files**, one per language, seven unit families, roughly two dozen rows each. The goal is no unexplained difference: every remaining `DIFFERS` is either fixed or listed in the header.
+- **Five languages' speed abbreviations were wrong**, not our style: Turkish, Danish, Dutch, Indonesian, and Norwegian. A Turkish user flagged `km/h` the day after the localization launch. The report agreed (`km/sa`) and showed the other four. A pass/fail test would have buried them under exceptions. Next to CLDR they read as errors, and we adopted CLDR's abbreviations for all five.
+- **A run of server fixes followed** once the differences sat side by side. Scandinavian miles moved to CLDR forms. Wind speed took CLDR's symbols for km/h and m/s. Composed decimals switched from a hard-coded dot to the locale separator. Cyrillic and Greek unit symbols were localized.
+- **No CI cost and no false alarms.** The report doesn't run on CI, doesn't flake, and doesn't ask an engineer to reargue a product decision. The trade-off is that nothing fails on its own. A regression shows up only when someone regenerates the report and reads the diff, so the repo's agent instructions require `bin/cldr-report` before any unit-string change counts as done.
 
 ## Lessons Learned
 
-- **A gate fits one right answer; a report fits a style decision.** A pass/fail test encodes a single correct string. A product that deliberately diverges from the platform default has none to encode, so the gate becomes a fight.
-- **Compute the verdict on what the reviewer sees.** If confusable characters are made visible only at print time, the verdict and the diff can disagree. Transform first, then compare.
-- **Park open questions in the artifact, not a wiki.** The U+2212 decision sits in the dispositions header, where every diff shows it, instead of in a document nobody opens.
-- **A comparison you can see finds bugs on both sides of it.** Putting client strings beside CLDR corrected five client abbreviations and surfaced a half-dozen server fixes the report was never aimed at.
+- **Use a pass/fail test when there's one right answer, and a report when there's a style decision.** A product that differs from the platform on purpose has no single correct string to assert, so the test becomes a fight.
+- **Compute the verdict on what the reviewer sees.** If you make hidden characters visible only when printing, the verdict and the diff can disagree. Swap first, then compare.
+- **Keep open questions in the generated file, not a wiki.** The U+2212 decision sits in the dispositions header, where every diff shows it, instead of in a document nobody opens.
+- **A side-by-side comparison finds bugs on both sides.** Putting our strings next to CLDR fixed five client abbreviations and turned up a half-dozen server fixes the report wasn't aimed at.
 
 ---
 
@@ -215,3 +215,23 @@ Research by eight Claude agents across the iOS, web, and blog repos (string cata
 **Rewrite (2026-09-01):** Part of an archive-wide rewrite. The owner asked, "with Fable 5.1, supposedly the writing quality is much better, I'm wondering if we should do a pass on all of the blog posts we have so far to improve them. should we start with the latest one?" and, after a pilot on the worktrees post, "I like the rewrite in any case and we have a lot of Fable capacity at the moment, should we go for it and dispatch an initial round of research to improve our skills, agents.md, etc and then dispatch sub-agents to rewrite each post? this could be done in a single PR, I think." Four Claude Fable 5.1 agents surveyed the archive to settle the voice and structure rules now in the blog-post-generator skill, and one agent rewrote this post under them. The post now opens on the two indistinguishable Turkish abbreviations instead of on the app, each design rule is stated once in its section rather than again as a bolded closer and again in Lessons Learned, the vendor-language cross-link moved from Lessons Learned into the body, and the title dropped its subtitle. Code blocks, dates, numbers, links, and headings are unchanged, and no facts were added.
 
 **Fact check (2026-09-01):** The owner asked, "1) dispatch research into the ~/Code/helloweather repos to validate the posts' content, for example checking the StoreKit code we shared is correct. 2) fix the "Pre-existing oddities" using your judgement, and feel free to make "judgment calls" as you see fit -- this is a blog meant to be authored by AI and is expected to lean on AI model judgement calls, advancements in model capabilities may prompt future editing/rewriting sessions, and for each one I'll want them to be driven autonomously." One Claude Fable 5.1 agent checked this post's code excerpts, numbers, dates, and quoted rules against the source repositories. The CLDR examples were corrected against the blessed snapshots: English CLDR renders `12mph` and `1,013hPa` (the spaced `12 mi/h` is German), the NBSP and U+2212 renderings are named to the locales that actually produce them, and the Russian visibility cell reads `5000м`. The first code block dropped an invented `verdict` property and now uses the catalog's `%lld` placeholder and the real `miles_long` row label; the snapshot helper was rewritten to the real semantics (`UPDATE_SNAPSHOTS == "1"`, records missing files locally, refuses under CI, reports drift via `Issue.record`) under the real `CLDRConformanceTests` name. The five-abbreviation result now notes the Turkish user report that preceded the table's confirmation, and the trade-off sentence notes that the iOS agent instructions require `bin/cldr-report` for unit-string changes.
+
+**Rewrite (2026-09-03):** Plain-register pass, pilot for issue #66, after a reader said the posts read like AI. Archive batch 2, run after batch 1 (#68) merged. The post now says "our style" for "house voice", defines CLDR and the dispositions header the first time each appears, splits the sentences that listed several locales at once, and uses "we" and contractions where the old text kept its distance; "for free" and "surfaces" are gone, and the coined verb "bless" became "commit". Judgment calls: the Results bullet "Zero CI cost, zero false alarms" became "No CI cost and no false alarms", since "zero" there was rhetorical rather than measured, and the `###` headings were reworded as plain instructions. Prompts, verbatim:
+
+**Prompt 1:** "we got feedback from a reader that our posts are still too AI/slop/wordy, an example and a possible skill to improve are included here, please review and let me know what you think, consider if we could do another big bang rewrite without spending too much of our Fable budget, or we could prep and schedule for when our limits are about to be reset and save in a date-triggered gh issue: I enjoy your ai posts, but man is it wordy :joy: [the reader's quoted paragraph and a link to the SimpleEnglish skill followed; both are in issue #66]"
+
+**Prompt 2:** "agreed, but lets make this into an issue, I just enabled issues, document what your plan is with a new issue, then we can kick it off with the smaller sample, maybe keep going depending on token usage, and the reader can subscribe to the gh issue to track if they like. as usual, please include this prompting in the issue so people can follow along to see "how the sausage is made" if they're interested. oh, and sorry, I think what I'm looking for is less about word counts, and more about "ai speak" as in, here's a bit more slack chatter about this with the reader: I'm kicking off a blog rewrite thing, not 100% sure if I want to do a big bang today tho b/c Fable budgets [10:38 AM]but I'll report back READER [10:39 AM] I'll be curious. Will it be "byte for byte identical" ??? :joy:"
+
+**Prompt 3:** "and the density issue, the quote the reader provided is a perfect "what not to do" example, I think"
+
+**Prompt 4:** "another possible thing to mix into the skill changes would be the ELI5 idea, which I generally like, I often ask AI to ELI5 after dispatching research so I get a human-readable explanation of the why, what, how etc"
+
+**Prompt 5:** "go ahead and kick off the pilot PR"
+
+**Prompt 6:** "perhaps the use of Opus for the writing is a source of the problem? I'm finding Opus to be a bad writer, and Fable 5.1 to be much better. the reader reports: Also I think it's funny that the ai suggestions are still bad. "extracting from the source is what makes the slice trustworthy" Should just be "The slice is trustworthy because it's directly extracted from the source." -- and the "Not every slice can be copied straight out of the source PR" rewrite paragraph is better, but perhaps still somewhat verbose/ai-slop-ish? I wonder if we can do just a bit better, but this does seem like a promishing direction. consider and report back with a recommendation."
+
+**Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
+
+**Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Prompt 9:** "usage looks fine, merge it and run batch 2"
