@@ -18,7 +18,7 @@ Since March, half of the commits in our web and iOS repositories touched plannin
 | web | 627 | 313 |
 | iOS | 652 | 353 |
 
-[Hello Weather](https://helloweather.com) is a one-person product with a designer helping part time, built across three repositories by coding agents. Two earlier posts describe the markdown system those agents used: [Planning Skill: Living Documents, Not Project Management](/planning-skill/) and [Plans Are Disposable, Skills Are Durable](/plans-disposable-skills-durable/). An index file ranked the work. A `plans/` folder held one document per piece of work, and the PR that shipped a plan deleted it. It was a good memory for agents. It was a poor place for a human to look, and the owner is about to have much less time to look. That made the change urgent. The board had to become the only planning page a person opens, and everything off it had to be invisible to agents by default.
+[Hello Weather](https://helloweather.com) is built across three repositories by coding agents. Two earlier posts describe the markdown system those agents used: [Planning Skill: Living Documents, Not Project Management](/planning-skill/) and [Plans Are Disposable, Skills Are Durable](/plans-disposable-skills-durable/). An index file ranked the work. A `plans/` folder held one document per piece of work, and the PR that shipped a plan deleted it. It was a good memory for agents. It was a poor place for a human to look, and the owner is about to have much less time to look. That made the change urgent. The board had to become the only planning page a person opens, and everything off it had to be invisible to agents by default.
 
 ## What the Markdown System Got Right
 
