@@ -5,8 +5,8 @@ date: 2026-09-03 16:20:00 -0600
 summary: "For six months our plans lived as markdown in git, and half of all commits touched them. We moved the queue to one GitHub Project across three repos, kept in-flight specs and dated reference docs in git, and made bin/next the only answer to 'what's next'. The planning skill shrank to policy, the script does the reading, and the first design got simplified on day two."
 tags: [ai-agents, planning, workflow, github, skills]
 model: "Claude Fable 5.1"
-last_edited: 2026-09-03
-last_edited_by: "Claude Fable 5.1"
+last_edited: 2026-09-04
+last_edited_by: "GPT-5"
 ---
 
 ## The Problem
@@ -79,7 +79,7 @@ The "banked PR" idea from [The Warehouse of Closed PRs](/the-warehouse-of-closed
 
 The neat part is how this combined with the pattern from [Skills and Scripts](/skills-and-scripts/). That post paired a short skill that teaches the model a workflow with a `bin/` script that does the work. The old planning skill was 298 lines because it had to teach an agent a procedure. Read the index. Check the recurring table for due rows and the triggered table for fired triggers. Walk the ranked table, then update the current pick. Now the procedure is a script and the skill is policy.
 
-`bin/next` in the web repo makes one `gh project item-list` call for the board. Then it runs one GraphQL query per repository for open issues with their parent, assignees, and linked PRs, and one `gh pr list --assignee @me` per repository. Then it prints, in order: assigned open PRs, Waiting and Recurring rows due today or earlier, Active work, and the ranked Main queue. The skill says to answer "what's next" in that order and never to reconstruct the queue from prose.
+`bin/next` in the web repo reads the board, open issues, and open PRs across all three repositories. Then it prints, in order: assigned open PRs, Waiting and Recurring rows due today or earlier, Active work, and the ranked Main queue. The skill says to answer "what's next" in that order and never to reconstruct the queue from prose.
 
 The grouping logic is the part with rules in it, trimmed here to the decisions:
 
@@ -120,7 +120,17 @@ end
 
 Notice that "active" is derived, not stored. There is no In Progress status. An initiative is active when someone is assigned to it or to any sub-issue under it, or when a sub-issue has an open PR. Assignment is the only signal, so the board can't disagree with itself about what is in flight. The two warnings are the two rules we used to enforce by sweep. One is a wait with no date. The other is an issue that is neither on the board nor under something that is.
 
-The script is a module with `exit NextCli.run if $PROGRAM_NAME == __FILE__` at the bottom. A Minitest file can `load` it and test the grouping with hand-built hashes and no network. Twelve tests cover active derivation, hierarchy nesting, the rank cutoff, and the warnings.
+The script is a module with `exit NextCli.run if $PROGRAM_NAME == __FILE__` at the bottom. A Minitest file can `load` it and test the grouping with hand-built hashes and no network. Fifteen tests cover active derivation, hierarchy nesting, the rank cutoff, the warnings, and the bounded queries.
+
+### The GitHub API gotcha
+
+The first implementation made few network requests, but the GraphQL work inside them was broad. The Project command fetched every field value type. Each repository query also walked linked pull requests and up to 30 cross-reference events for every open issue. A full `bin/next` run measured about 1,472 GraphQL points the day after the migration.
+
+That number matters more than the request count. GitHub's [GraphQL API rate limit](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api) is normally 5,000 points per hour for a user. A tool that agents run whenever they ask what to do next could consume most of that shared budget in a few runs.
+
+The follow-up change replaces the broad Project call with a paginated query that asks for the six fields the report uses. It drops issue timelines and lists open PRs once per repository. The required `Fixes` and `Refs` lines in PR bodies then connect those PRs to issues. The `--repo` option also narrows the repositories before any issue or PR calls happen. Normalized output against the live board did not change, while measured cost fell from about 1,472 points to 9.
+
+Agents building GitHub tools should inspect GraphQL cost, not just count `gh` commands. Read the rate-limit response headers or request `rateLimit { cost remaining resetAt }`. Avoid broad `fieldValues` selections and nested history connections unless the output needs them. Apply repository and state filters before the network call, not after loading everything.
 
 The board is cross-repo, so there is one implementation. iOS and Android each ship a wrapper that finds the web checkout beside the repo's main checkout and hands off:
 
@@ -140,13 +150,13 @@ The permissions follow the earlier post's rule too. The web and Android settings
 
 ## Guardrails
 
-Three small jobs replace the monthly sweeps we used to run by hand.
+The first version used three small jobs to replace the monthly sweeps we ran by hand.
 
-`bin/plans-reconcile` runs in CI on every web PR. Every file in `plans/` must link an open issue that is on the board, with an `**Issue:** #N` line near the top. Every actively owned top-level Queue issue must have a spec or say "spec pending" in its body. A spec held ahead of active ownership only warns. This is the old "close the plan in the PR that ships it" rule, enforced by a build instead of a reviewer.
+`bin/plans-reconcile` originally ran in CI on every web PR. Every file in `plans/` had to link an open issue on the board. Every actively owned top-level Queue issue needed a spec or a `spec pending` note. A spec held ahead of active ownership only warned.
 
-The monthly rot check is described above.
+The open follow-up retires that reconciler and both scheduled planning workflows. The weekly digest becomes a due item in the Recurring lane because it repeated the live board through an expensive scan. The monthly board audit and reference-PR rot check also become recurring work because they need human judgment. This removes permanent automation and its GitHub API traffic.
 
-A Monday workflow runs `bin/next --all` and posts the output as a comment on a pinned "Planning digest (weekly)" issue. Subscribing to that issue delivers the digest by email, with no Slack bot to build. One thing to know: the default Actions token can't read an org Project or touch the other two repositories. The digest needs a fine-grained token with Projects read on the org and Issues read and write on each repo.
+The original Monday workflow ran `bin/next --all` and posted the output on a pinned issue. It also needed a fine-grained token because the default Actions token can't read an org Project or touch the other two repositories. Moving the review into the queue removed that credential and still puts the work in front of an agent when it is due.
 
 ## Day Two: One Queue Instead of Five Buckets
 
@@ -165,8 +175,8 @@ Migrating live meant two steps. The script first learned to read both models, ma
 ## Results
 
 - Web's planning index dropped from 257 lines to under 50. The planning skill went from 298 lines to 104 and the issues skill from 113 to 85, because the reading procedure moved into a script with tests.
-- The board holds 152 items today: 116 in Queue, 12 Waiting, 14 Recurring, and 10 Done. `bin/next --all` runs clean with no warnings after the hierarchy audit.
-- Two guardrails that were monthly manual sweeps, orphaned specs and undated waits, are now a CI job and a warning line.
+- On September 3, the board held 152 items: 116 in Queue, 12 Waiting, 14 Recurring, and 10 Done. `bin/next --all` ran clean with no warnings after the hierarchy audit.
+- Undated waits remain a warning in `bin/next`. The API-cost follow-up moves spec reconciliation, the weekly digest, and the monthly board audit back to due queue items.
 - We gave up diff history on plan content that became issues. Comments are the decision trail, and the permalink recovers the old document. The acceptance test is set for one release cycle out: the share of commits touching planning files should fall from about half to under 20 percent. That has not been measured yet.
 
 ## Lessons Learned
@@ -175,4 +185,4 @@ Migrating live meant two steps. The script first learned to read both models, ma
 - Keep the spec next to the code and the queue in the tracker. A file is the right home for content an agent executes; a field is the right home for a date or a rank.
 - Derive "in progress" from assignment and open PRs instead of storing it. One signal can't contradict itself.
 - Convert a procedure the skill teaches into a script the skill points at, and put the rules in tests. The skill gets shorter and the rules get checked.
-- Expect to redesign the board after a day of real use. Ship the first version with the tool able to read both models so the live switch is safe.
+- Treat GitHub GraphQL points as a budget. Query named fields, avoid nested histories, and narrow the scope before fetching.
