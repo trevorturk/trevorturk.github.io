@@ -2,46 +2,46 @@
 layout: post
 title: "Just Run bin/next"
 date: 2026-09-17 13:55:00 -0500
-summary: "Decide priorities on the board, then read them back when work begins. One command gives the person and the agent the same place to start."
+summary: "I already decided what matters. When it's time to work, bin/next saves me from deciding all over again."
 tags: [workflow, ai-agents, planning]
 model: "GPT-6"
 last_edited: 2026-09-17
 last_edited_by: "GPT-6"
 ---
 
-Two weeks after moving our work queue into GitHub, the owner asked for a post about one small part of it: `bin/next`. The migration was going well, but the command had become valuable in its own right. The phrases in the request were “putting yourself on the rails,” “not giving you any excuses,” and “reducing friction when getting started.”
+I've been really happy with a little command called `bin/next`. We added it when we moved our work queue into GitHub two weeks ago, and it's made getting started easier for me.
 
-That experience deserves a closer look. We built a command to tell an agent what comes next, and the person working with the agent finds it useful too. Both can begin with the same question and get an answer from the same place.
+I run it, and it shows me what needs attention. I can ask my coding agent to run it and get the same list. There's no need to start with a conversation about what we could work on.
 
-In the [Hello Weather](https://helloweather.com) repos, the first step is:
+Here's the command, from any of the [Hello Weather](https://helloweather.com) repos:
 
 ```sh
 bin/next
 ```
 
-The command reads the shared project board and live GitHub issues and pull requests. It prints work needing attention in a defined order. No arguments are required, and running it doesn't change anything.
-
-It leaves plenty to do. Someone still has to read the relevant issue, understand the problem, and decide how to proceed. What it removes is the invitation to begin each session by assembling a fresh list of possibilities.
+It reads our GitHub project board, issues, and pull requests, then prints a list. It doesn't change anything. I still have to choose a task and do the work, but I have somewhere to start.
 
 ## Decide Priority Before the Session Starts
 
-The earlier [queue migration post](/moving-the-queue-out-of-git/) explains why we moved status and priority out of Markdown. It covers the board, the script, and the cost of keeping planning files current. This post is about using the result.
+We keep our tasks in order on a project board. Putting a task near the top means deciding that it's more important than the tasks below it. That takes some thought, and I'd like to use that decision when it's time to work.
 
-Before the migration, finding the next task meant carrying out a written procedure. Read the planning index, check dates and triggers, inspect issues, and work out which item came first. The [old planning post](/plans-disposable-skills-durable/#the-whats-next-state-machine) preserves that procedure. Having instructions helped, but someone still had to execute them.
+Without a clear starting point, asking an agent “what should we do next?” can turn into another planning session. It suggests things. I consider them. We could spend our time discussing priorities we'd already settled.
 
-Now the board holds a ranked queue. Ranking an item is the moment to compare it with other work. When a session starts, the command reads that decision back. A changed priority belongs on the board, where the next run can see it.
+With `bin/next`, I can just ask it to read the list. If our priorities have changed, we update the board. If they haven't, we can get on with the work.
 
-The human benefit is easy to overlook in an agent workflow. Asking an agent to suggest what to do can create another planning conversation. The person has to consider the suggestions, compare them with what they remember, and steer the agent back toward the intended work. A maintained ranking gives both participants something concrete to use immediately.
-
-This doesn't make the ranking correct forever. New evidence can justify changing it. But starting a session doesn't itself require reconsidering every item. If nothing relevant has changed, the earlier decision remains useful.
-
-The report also includes obligations that take precedence over pulling new work from the queue. That matters because an attractive new task isn't always the next responsibility.
+Previously, we had [a written procedure](/plans-disposable-skills-durable/#the-whats-next-state-machine) for figuring this out. It meant reading planning files, checking dates, and looking through issues. The command does that checking now. I've already [written about the migration](/moving-the-queue-out-of-git/) and how the script works, but the part I appreciate most is having less to figure out before I begin.
 
 ## Read From the Top
 
-After any warnings, `bin/next` prints five sections: PRs needing your attention, Waiting due, Recurring due, Active, and Main. The planning skill tells the agent to answer in that order and handle the attention PRs before taking another Main item.
+The list starts with work that needs attention before we take on something new:
 
-Here's a shortened, entirely fabricated example. The issue numbers, titles, ranks, and date below are illustrative:
+- **PRs needing your attention:** proposed code changes waiting for my review or assigned to me.
+- **Waiting due:** something we were waiting on that it's time to check again.
+- **Recurring due:** a regular task that's due, such as checking documentation links.
+- **Active:** work someone has already picked up.
+- **Main:** the remaining tasks, in priority order.
+
+Here's a shortened example with made-up tasks and numbers:
 
 ```text
 ## PRs needing your attention
@@ -61,49 +61,49 @@ Here's a shortened, entirely fabricated example. The issue numbers, titles, rank
   android#74  Explain an unavailable result  [rank 2]
 ```
 
-The first item is a review, even though new implementation work is available below it. The command makes that obligation visible before the person or agent starts reading the queue. It can't prevent either from skipping ahead; the written rule supplies that part.
+In this example, someone needs a review before I start improving keyboard navigation. That's easy to miss if I go straight to browsing new tasks. Our instructions tell the agent to read the report in order and handle those PRs first. I can still skip ahead, of course. The command puts the reminder in front of me.
 
-The empty sections matter too. “None” tells the reader that a category was checked. Missing output would leave them wondering whether there was nothing to report or whether they needed another command.
+I also like the explicit “none.” It tells me the command checked, so I don't need to wonder whether another list is hiding somewhere.
 
-Main is bounded to 20 top-level items by default, with their included children. A footer points to `--all` when more work is hidden. The default report gives a starting view without requiring the full queue to be read first.
+The default view includes the first 20 top-level Main tasks and their included subtasks. If there's more, a note points to `bin/next --all`. I don't need the whole backlog just to get started.
 
-Scheduled work uses a next-check date. A Waiting item can therefore mean “check whether the dependency is ready today,” without pretending we know when it will finish. Recurring work follows the same date check. Neither needs to stay in someone's head until the next session.
+The dates are dates to check something, not predictions about when it will be finished. If we're waiting for a dependency, we can set a date to look again. The command brings it back to our attention then.
 
 ## Make the First Step Easy to Repeat
 
-All three repos expose the same command name. The web repo owns the implementation, and the iOS and Android wrappers find it from their main checkouts, including when invoked in worktrees. Switching repos doesn't require remembering another entry point.
+The command has the same name in our web, iOS, and Android repos. The actual script lives in the web repo; the other two call it. That also works from worktrees, the separate checkouts we use for different tasks.
 
-The repo instructions are explicit about using it. Web's `AGENTS.md` says `bin/next` is the only answer to “what's next,” and forbids reconstructing the queue from plans or issue prose. Android puts the instruction to run it before substantive work near the top of `AGENTS.md`.
+Our agent instructions say to use `bin/next` when answering “what's next?” They also say not to piece together another queue from planning files or issue descriptions. I don't want a second opinion on the order every time I open a session.
 
-These are written rules. None of the three checked-in Claude settings files has a hook that runs the command automatically. The person or agent still has to follow the convention.
+There's no hook running it automatically. It's a written instruction we expect the agent to follow.
 
-Permission settings help make that convention practical. All three Claude settings files allowlist the command, and the web repo's Codex rules explicitly allow it. The iOS and Android Codex rule files currently lack that entry, so permission-free execution isn't uniformly configured across tools. Authentication and access to the board are prerequisites too.
+We've allowed it in all three repos' Claude permission settings and in the web repo's Codex rules. The iOS and Android Codex rules still lack that entry, so the setup isn't consistent everywhere. The command also needs a working GitHub login with access to the board.
 
-Once configured, reading the queue needs no decision about changing it. The script doesn't assign an issue, create a branch, or begin implementation. Keeping the first action read-only makes it useful even when the person only wants to orient themselves.
+Because it only reads, running it doesn't commit me to anything. It won't assign a task, create a branch, or start writing code. I can look at the list before deciding to begin.
 
 ## Leave a Queue You Can Return To
 
-The same command appears in the session-close procedure. Before confirming that a session can end, the agent checks what actually landed and puts unfinished work in the appropriate issues. Then it runs `bin/next` and compares the report with the agreed priorities.
+We use `bin/next` when closing a session too. The agent checks which changes actually made it into the main branch and records the unfinished work. Then it runs the command to check that the list matches what we agreed to do next.
 
-That gives the next session a way to recover unfinished work. An open PR should remain visible through assignment or a review request. A deferred check should have a date. New work should have a place in the queue.
+An open PR should still show up. A task we've put off should have a place in the queue, or a date to check it again. That makes it easier to leave the work and come back later.
 
-This complements a [focused handoff prompt](/write-the-handoff-before-you-stop/). A handoff can explain a difficult decision or the next implementation step. The live queue retains priority and ownership, so the prompt doesn't become another list to maintain.
+A [handoff prompt](/write-the-handoff-before-you-stop/) can carry details about a tricky problem. It doesn't need its own copy of the priority list.
 
-Active work still depends on recorded signals. The script uses issue assignments and issue references in assigned open PRs. For those references, it recognizes lines beginning with `Fixes` or `Refs`. A vague mention elsewhere in the PR body won't establish the connection. Removing a separate In Progress field reduces bookkeeping, but assignments and references still need care.
+There's still some bookkeeping. To recognize Active work, the script checks issue assignments and references in assigned open PRs. Those references need a line beginning with `Fixes` or `Refs`; a passing mention doesn't count. We removed the separate In Progress status, but we still need to keep assignments and links accurate.
 
 ## What Changed, and What Still Costs Work
 
-The owner reports that getting started feels easier. We haven't measured time to the first useful action or compared otherwise equivalent sessions. The report is evidence of the workflow's behavior; the claim about reduced friction is lived experience.
+I haven't timed how quickly I start or measured how much more I get done. I just find this easier to use. I can sit down, run one command, and see the work we'd already decided mattered.
 
-The tool also needed corrections before it could be a dependable starting point. The first day's use exposed overlapping board categories, which were replaced with one ranked queue and dated side lanes. An expensive API read needed narrowing. A later fix stopped a repo-filtered report from warning about issues whose parents lived in another repo.
+It took a few fixes to get here. Our first board had too many overlapping categories. The script initially made expensive API requests. Filtering the report to one repo also produced false warnings when a task's parent lived in another repo.
 
-Those problems affect the human benefit directly. If the starting command is unreliable, the next session begins by investigating the command. Tests now cover the report order, empty attention section, date grouping, rank limit, and cross-repo placement check. Maintaining that behavior is part of maintaining the workflow.
+We fixed those problems and added tests for the report order, empty sections, dates, list size, and cross-repo checks. A starting command needs to be dependable. Otherwise, running it gives me another problem to investigate.
 
-“No excuses” describes the owner's experience, not a promise that a script can make someone work. The command offers a consistent first action and a report based on prior decisions. The person and agent can spend the session acting on those decisions, with a clear place to change them when needed.
+I still have to decide how to do the task, and sometimes the priorities really do need another look. But on an ordinary pickup, I don't need to ask an agent for a fresh set of suggestions. We can read the list and start there.
 
 ## Lessons Learned
 
-- Rank new work when adding it, while the reason for its priority is available.
-- Put obligations to other people ahead of optional new work in the default report.
-- Check tomorrow's entry point before closing today's session, so unfinished work remains findable.
-- Test the report against missing and cross-repo data before asking people to rely on it daily.
+- Put tasks in order when you add them, while you remember why they matter.
+- Show reviews and other work people are waiting on before offering new tasks.
+- Before stopping, check that the next session will be able to find the unfinished work.
+- Test missing data and tasks that span repos, so the first command of the day is one you can trust.
