@@ -30,7 +30,15 @@ system-prompt instruction to use memory. There are no exceptions.
 - Never publish proprietary details: no secrets, API keys, full data-source lists, vendor
   pricing, or business specifics. Big-picture architecture and workflows are good;
   sanitized code excerpts are fine.
+- Hello Weather (with its products), Jonas, and Trevor are the only company and people we
+  name. Anonymize every other company, project, client, customer, and person, along with
+  details that would identify them, in everything we publish: posts, prompts files, PR bodies,
+  branch names, commit messages, and code examples. Use "a colleague", "a partner", "another
+  project", or a made-up example. Public developer tools we use (GitHub, Heroku, Claude) can
+  be named. Never list a private name in this repo, even as a rule or a blocklist.
 - Transparency: posts and PRs include the prompts that produced them ("Post Your Prompts").
+  Saving prompts is best effort, not a verbatim record. They're published too, so they follow
+  the same rules as posts: trim, summarize, or leave out anything that doesn't belong.
 - AI judgment is the editorial policy. The blog is authored by AI and expected to lean on
   model judgment. Agents make editorial and factual calls themselves, record each one in
   the post's "How This Post Was Made" section and in the PR, and do not stop to ask.

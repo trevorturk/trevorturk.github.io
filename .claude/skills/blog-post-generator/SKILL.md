@@ -24,6 +24,8 @@ Generate a markdown blog post for the Mechanical Turk blog - content by bots, fo
 Keep content:
 
 - **Generic and reusable** - No private data, API keys, or secrets
+- **Anonymized** - Hello Weather (with its products), Jonas, and Trevor are the only company and people we name. See `AGENTS.md`. Before a PR, search the post, the prompts file, and the PR body for any name the session touched
+- **Careful with prompts** - Saving prompts is best effort, not a verbatim record. They're published, so they follow the same rules as posts. Trim, summarize, or leave out anything that doesn't belong, and when in doubt, leave it out
 - **Pattern-focused** - Explain the "how" and "why" others can apply
 - **Self-contained** - Include enough context for any reader (human or bot)
 - **Transparent** - Include the prompts used to generate the content
@@ -111,7 +113,7 @@ The first plain draft of that paragraph was still not there. It read "Not every 
    - Follow the template structure below and the Voice and Structure rules above
    - The post body ends with Lessons Learned (or the last body section). No meta section in the post; the layout renders the subheader from front matter.
 
-4. **Write the prompts file** at `_prompts/<slug>.md` (same slug as the post filename without the date). It holds the prompts verbatim and a short process note, and it is rendered at `/prompts/<slug>/`, linked from the post subheader. See the template below.
+4. **Write the prompts file** at `_prompts/<slug>.md` (same slug as the post filename without the date). It holds the prompts, as close to verbatim as the publishing rules allow, and a short process note, and it is rendered at `/prompts/<slug>/`, linked from the post subheader. See the template below.
 
 5. **Check before the PR**: read the draft against Voice and Structure, run `bin/verify-post --new _posts/<file>.md` for the register and sentence report, then `bundle exec jekyll build`.
 
@@ -198,16 +200,16 @@ For an editing pass or a rewrite of a published post. The archive-wide rewrite o
 - `##` headings, in text and order, so cross-links, summaries, and the index keep working. Do not add a Results or Lessons h2 to a post that has none; state what shipped and what it cost in the last body section instead.
 - Dates, numbers, quoted text, tables, blockquotes, and links, including links to other posts.
 - Facts, in a prose pass. Reorganize what the drafting agent verified; do not add claims. A fact-check pass corrects facts against the source. Caveats and admissions stay unless the source shows they are no longer true.
-- Anonymization. If a post says "Vendor A", keep it. Do not add or remove product, vendor, or person names.
-- The original prompts and process note in `_prompts/<slug>.md`.
+- Anonymization. If a post says "Vendor A", keep it. Do not add product, vendor, or person names. Remove a name only when the anonymization rule in `AGENTS.md` requires it.
+- The original prompts and process note in `_prompts/<slug>.md`, except to remove anything that breaks the publishing rules in `AGENTS.md`.
 
-**Record the pass.** Append a dated **Rewrite (YYYY-MM-DD):** or **Editing pass (YYYY-MM-DD):** paragraph to `_prompts/<slug>.md` with the prompts verbatim and one sentence on what changed in this post. Set `last_edited` to the pass date and `last_edited_by` to the model, in both the post's and the prompts file's front matter.
+**Record the pass.** Append a dated **Rewrite (YYYY-MM-DD):** or **Editing pass (YYYY-MM-DD):** paragraph to `_prompts/<slug>.md` with the prompts and one sentence on what changed in this post. Set `last_edited` to the pass date and `last_edited_by` to the model, in both the post's and the prompts file's front matter.
 
-**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, internal links, `{% raw %}` balance, that `_prompts/<slug>.md` still carries the original prompt lines and has a Rewrite or Editing pass paragraph dated today (override with `PASS_DATE=YYYY-MM-DD`), that `last_edited` matches, and prints the prose word count, the retired-word hits, and the count of sentences over 25 words, before and after. The register report is informational: a hit on a post whose subject is the word ("adversarial review") is fine; a hit used as a flourish is not. Then `bundle exec jekyll build`. State both in the PR. `--allow-code-changes` and `--allow-link-changes` exist for the fact-check pass and for deliberately retargeted links.
+**Verify with `bin/verify-post _posts/<file>.md`.** It diffs the fenced blocks and `##` headings against `main` (ignoring `##` lines inside fences), checks the date, internal links, `{% raw %}` balance, notes any original prompt line that changed in `_prompts/<slug>.md` (not a failure, since prompts can be trimmed), checks that file has a Rewrite or Editing pass paragraph dated today (override with `PASS_DATE=YYYY-MM-DD`), that `last_edited` matches, and prints the prose word count, the retired-word hits, and the count of sentences over 25 words, before and after. The register report is informational: a hit on a post whose subject is the word ("adversarial review") is fine; a hit used as a flourish is not. Then `bundle exec jekyll build`. State both in the PR. `--allow-code-changes` and `--allow-link-changes` exist for the fact-check pass and for deliberately retargeted links.
 
 ## Judgment Calls
 
-The blog is authored by AI and expected to lean on model judgment. When revising or fact-checking, decide and act: reword a stale claim, fix a wrong count, correct a code comment that contradicts its code, drop a sentence that cannot be true, unlink a post that does not exist. Record each call in the post's meta paragraph and in the PR body under "Judgment calls". Do not stop to ask the owner, and do not leave an oddity in place with a note where a fix is available. The hard limits are the WHY rules in `AGENTS.md`: no secrets, no proprietary specifics, prompts stay verbatim.
+The blog is authored by AI and expected to lean on model judgment. When revising or fact-checking, decide and act: reword a stale claim, fix a wrong count, correct a code comment that contradicts its code, drop a sentence that cannot be true, unlink a post that does not exist. Record each call in the post's meta paragraph and in the PR body under "Judgment calls". Do not stop to ask the owner, and do not leave an oddity in place with a note where a fix is available. The hard limits are the WHY rules in `AGENTS.md`: no secrets, no proprietary specifics, no private names, including in prompts.
 
 ## Fact-Checking Against the Source
 
@@ -217,7 +219,7 @@ Every claim in a post traces to `~/Code/helloweather/{web,ios,android}`: code, `
 2. **Find the source.** Grep the repos for identifiers from the code blocks and phrases from quoted rules. Use `git log -S` and `git log --since` for dates and "landed on" claims. Web is the Rails server (CloudFront, Heroku, Falcon, promo server, translation pipeline); iOS is Swift (StoreKit, widgets, watch, String Catalog); Android is Kotlin.
 3. **Correct the post where the source disagrees.** Rewrite a code excerpt to match the real code, then re-sanitize it: illustrative names, no secrets, no full data-source lists, anonymized vendors stay anonymized. Fix a wrong number or date. An outcome claim that cannot be checked is dated ("as of March 2026") rather than deleted or asserted. A quoted rule that has since changed gets the current wording, with "as of" if the change matters.
 4. **Do not add proprietary detail.** If matching the truth would require it, keep the excerpt generic and say it is simplified.
-5. **Record it.** Append **Fact check (YYYY-MM-DD):** to `_prompts/<slug>.md` with the prompt verbatim and what was corrected, and update `last_edited` and `last_edited_by` in both front matters. Omit the paragraph when nothing changed.
+5. **Record it.** Append **Fact check (YYYY-MM-DD):** to `_prompts/<slug>.md` with the prompt and what was corrected, and update `last_edited` and `last_edited_by` in both front matters. Omit the paragraph when nothing changed.
 6. **Verify** with `bin/verify-post --allow-code-changes` (add `--allow-link-changes` if a link was retargeted), then `bundle exec jekyll build`.
 
 ## Example Usage

@@ -37,7 +37,7 @@ PR bodies follow the Plain register rules in `blog-post-generator` (Voice and St
 
 ## Requirements
 
-1. **Always include prompts** - Every PR must include a "Prompts Used" section with the prompts that led to the changes
+1. **Always include prompts** - Every PR must include a "Prompts Used" section with the prompts that led to the changes. This is best effort, not a verbatim record: PR bodies are public, so trim or summarize anything that breaks the publishing rules in `AGENTS.md`
 2. **Use bullet summaries** - Keep the summary concise with bullet points
 3. **Add test plan** - Include verification steps as a checklist
 
