@@ -11,7 +11,7 @@ last_edited_by: "Claude Opus 5.5"
 
 In the month to October 30, we merged 568 PRs across the three [Hello Weather](https://helloweather.com) repos. The median merged PR was 21 to 32 lines, depending on the repo. Another 135 PRs were ready for review and waiting.
 
-A few developers I talk to are building similar setups. One published a write-up about an agent that opens small PRs and never merges them. Another has agents record video before and after each fix, because an agent's own report that something worked isn't enough. The questions that keep coming up are what starts the work, how you trust it, and how it gets better.
+A few developers I talk to are building similar setups. John Nunemaker published [a write-up](https://www.johnnunemaker.com/dont-make-a-human-do-what-ai-is-amazing-at/) about an agent that opens small PRs and never merges them. [Justin Searls](https://justin.searls.co) has agents record video before and after each fix, because an agent's own report that something worked isn't enough. The questions that keep coming up are what starts the work, how you trust it, and how it gets better.
 
 Our answers are mostly in skills. We have 86 skill folders across the three repos, and most cover one system, like App Store pricing or CDN caching. The ones below are about how the work gets run and checked, so they should transfer. The excerpts are trimmed and sanitized.
 
@@ -30,7 +30,7 @@ is still unclaimed. Then push the branch and open a draft PR. That draft PR is t
 
 The draft PR keeps two builds from taking the same issue. An agent can't read the usage meter, so a run stops when the list is empty, when it gets a rate-limit refusal, or when I say stop.
 
-This has a real cost. On October 30, the waiting PRs in web and iOS had a median age of 13 days, and they were about ten times the size of the ones that merged. The write-up's author caps open PRs at five per repo. We looked at that and decided against it. We tried showing the count before each dispatch, then took that out three days later. Hello Weather is a side project and I build when there are tokens to use, so the skill now says "Never hold a build for the pile". The open count has gone from 135 to 175 in the four days since October 30, 121 of them on iOS. I'm betting that I can catch up, and I haven't yet.
+This has a real cost. On October 30, the waiting PRs in web and iOS had a median age of 13 days, and they were about ten times the size of the ones that merged. Nunemaker caps open PRs at five per repo. We looked at that and decided against it. We tried showing the count before each dispatch, then took that out three days later. Hello Weather is a side project and I build when there are tokens to use, so the skill now says "Never hold a build for the pile". The open count has gone from 135 to 175 in the four days since October 30, 121 of them on iOS. I'm betting that I can catch up, and I haven't yet.
 
 ## `afk`: What Done Means
 
@@ -86,7 +86,7 @@ Pick the lightest fix that will hold, in this order:
 5. A cut. Does the line change what an agent would do by default?
 ```
 
-On October 30, we added PRs closed without merging to what the retro reads. That idea came from the same write-up, whose author keeps a rule file built from rejected PRs. We kept our existing skills as the home for those rules and only added the input. The November 1 run brought five proposals with quoted evidence, and I approved all five. The retro is adapted from two open-source skills.
+On October 30, we added PRs closed without merging to what the retro reads. That idea came from Nunemaker, who keeps a rule file built from rejected PRs. We kept our existing skills as the home for those rules and only added the input. The November 1 run brought five proposals with quoted evidence, and I approved all five. The retro is adapted from two open-source skills.
 
 ## `investigate`: Answers With Labels
 
@@ -105,7 +105,7 @@ For "is this safe", it ranks the proof from "you said so" up to "you reproduced 
 
 ## `performance-optimization` and `deploy-check`: Numbers That Reach Production
 
-We removed `Rack::Deflater` once and measured a CPU saving that never reached production. Falcon was compressing every response itself, and our probes call `Rails.application.call`, which skips Falcon's middleware. The skill now requires each run of performance work to prove its benchmark can see the cost before the first change. It also makes the agent question its result before reporting it:
+In October we removed `Rack::Deflater` so Cloudflare could do the compressing, and our benchmark showed a 2% CPU saving. Nothing changed in production. Falcon was compressing every response itself, and our probes call `Rails.application.call`, which skips Falcon's middleware. A week later we turned off Falcon's gzip layer too, and that change delivered the saving. Our benchmark puts it at about 0.85 ms per forecast response, and we estimated Heroku would send Cloudflare about 14 times more bytes. The skill now requires each run of performance work to prove its benchmark can see the cost before the first change. It also makes the agent question its result before reporting it:
 
 ```markdown
 - Why not double? Name what limits the result, from a profile.
