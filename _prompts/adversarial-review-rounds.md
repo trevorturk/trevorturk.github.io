@@ -4,8 +4,8 @@ title: "Adversarial Review Rounds"
 post_url: /adversarial-review-rounds/
 post_date: 2026-07-29
 model: "Claude"
-last_edited: 2026-09-03
-last_edited_by: "Claude Fable 5.1"
+last_edited: 2026-11-04
+last_edited_by: "Claude Opus 5.5"
 ---
 
 **Prompt 1:** "it's been a while since we added any blog posts, see recent work in the ~/Code/helloweather projects, dispatch opus agents to search for interesting stuff that we've done since the last blog post, perhaps one or more agents per repo, then review and consider and come up with a proposed list of blog posts we might consider."
@@ -35,3 +35,5 @@ Research by one Claude agent per repo mining git history since the previous post
 **Prompt 7:** "agreed except I wouldn't worry about the word count at all. "wordy" isn't the same thing as "word count" and I think the reader (and my) issue is more to do with the AI style of speaking, which is why we're looking at the ELI5 and SimpleEnglish skill adaptations."
 
 **Prompt 8:** "merge it and start the first batch of ten, then I can check usage, and then we can keep going -- just to check, are you saying the total spend would be ~6M tokens?"
+
+**Editing pass (2026-11-04):** Added a one-line note at the top pointing to [the follow-up post](/one-fresh-review-instead-of-adversarial-rounds/), after a reader asked whether this skill was public. Nothing else in the post changed. Requested as part of the follow-up post's prompt, recorded in [its prompts file](/prompts/one-fresh-review-instead-of-adversarial-rounds/).
