@@ -23,3 +23,7 @@ Judgment calls:
 - The earlier post gets a one-line pointer to this one, because the link being passed around still goes there.
 
 One fresh Fable review ran before handoff. It reproduced the counts and dates from `gh` and git. Adopted: naming `AGENTS.md` as well as `CLAUDE.md` in the model-split note, saying a couple of anti-pattern rows come from the iOS skill, defining Fable in the opening, describing the iOS PR's scope as view loops across the app, watch, and widgets, and restoring a dropped `caffeinate` clause in `afk`. Not changed: the "super sure" quote, which it could not find on GitHub because it comes from a session transcript.
+
+**Prompt 2:** "\"What Went Wrong With Rounds\" is quite long and a bit in the weeds, can you tighten it up and reduce the examples? the reader wants to get to the skills and this is a lot of domain specific preamble"
+
+That section now has one example, the iOS one, in fewer details. The web repo example and the Android billing sentence came out.

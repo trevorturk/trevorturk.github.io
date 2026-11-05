@@ -15,19 +15,11 @@ That count is a rough word search, but the change behind it is real. A round sen
 
 ## What Went Wrong With Rounds
 
-Rounds found real bugs, and the examples in the earlier post still stand. One reviewer with no session context caught an Android billing fix that could have wiped a paying subscriber's membership.
+Rounds found real bugs, and the examples in the earlier post still stand. The trouble was the other findings. Ask several agents what's wrong with a change and each will find something, and much of it was true but didn't matter.
 
-The trouble was the other findings. Ask several agents what's wrong with a change and each will find something. Much of it was true and didn't matter.
+In August, an iOS speed-up that shouldn't have changed anything on screen went through two rounds with seven reviewers. They proposed guards against bad chart values from our server, and one reviewer showed the crash was real. I approved those findings, then looked at the result and rejected them, because our server doesn't send those values. The speed-up [shipped without the guards](/the-warehouse-of-closed-prs/).
 
-The clearest case is an iOS PR from August. It moved repeated calculations out of view loops across the app, watch, and widgets, which is a speed-up that shouldn't change what anyone sees. Seven reviewers read it across two rounds. The first round suggested clamping one chart range, so an inverted range from our server wouldn't crash. The second extended that to all four sites and a shared helper, and added a guard against a zero step. One reviewer ran the code and showed that a zero step really does crash.
-
-The session judged each finding, and I approved them. Then I looked at the result on August 4 and rejected all of it as speculative defense against values our own server controls. The speed-up [shipped without the guards](/the-warehouse-of-closed-prs/).
-
-Those reviewers were right about the code. A zero step does crash. Our server doesn't send one, and a reviewer reading a Swift file can't tell that. That's our reading of why this kept happening: a reviewer with no context can't know which inputs really occur, so "could break" looks the same as "breaks". Asking for problems also rewards listing them.
-
-The web repo had the same experience a few days earlier. A four-agent round on one vendor's precipitation field correctly decided not to change it, and found a real bug, a feels-like low above the actual low. It also produced a hardening PR with no change to any recorded output. Some of that PR was worth having, like not building 1,000 objects for a 15-day forecast. The rule against the rest merged the same day, and its PR records the lesson as "we're clearly reaching for things to fix, instead of finding actual issues."
-
-A guard adds code to read, and it can trade a crash report for a screen that's quietly wrong. Our default is the happy path: write the case that happens, and let the unexpected raise so the error tracker shows it. We make an exception when we have a reason to be careful.
+Our reading is that a reviewer with no context can't know which inputs really occur, so "could break" looks the same as "breaks". A guard adds code to read, and it can trade a crash report for a screen that's quietly wrong. We'd rather write the happy path and let the unexpected raise, unless we have a reason to be careful.
 
 ## How the Rules Changed
 
