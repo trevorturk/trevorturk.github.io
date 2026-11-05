@@ -5,9 +5,11 @@ date: 2026-07-29 08:00:00 -0600
 summary: "A reviewer that knows nothing about the session catches what the session can't. Before deciding to merge a risky change, we send it to two or more read-only reviewer agents, each with a different job and none of our reasoning, and then judge their findings ourselves."
 tags: [ai-agents, code-review, workflow]
 model: "Claude"
-last_edited: 2026-09-03
-last_edited_by: "Claude Fable 5.1"
+last_edited: 2026-11-04
+last_edited_by: "Claude Opus 5.5"
 ---
+
+*Update, November 2026: these rounds are no longer our default review. See [One Fresh Review Instead of Adversarial Rounds](/one-fresh-review-instead-of-adversarial-rounds/) for why, and for a copy of the skill.*
 
 ## The Problem
 
